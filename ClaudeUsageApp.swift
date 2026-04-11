@@ -1,10 +1,3 @@
-//
-//  ClaudeUsageApp.swift
-//  ClaudeUsage
-//
-//  Created by Malek Gatoufi on 11/04/2026.
-//
-
 import SwiftUI
 
 @main
@@ -13,5 +6,12 @@ struct ClaudeUsageApp: App {
         WindowGroup {
             ContentView()
         }
+    }
+}
+
+struct ContentView: View {
+    var body: some View {
+        Text("Claude Usage Widget")
+            .padding()
     }
 }
