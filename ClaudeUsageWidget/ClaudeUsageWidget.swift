@@ -196,31 +196,34 @@ struct BarView: View {
     private var fill: CGFloat  { CGFloat(min(max(pct / 100, 0), 1)) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(label)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
                 Text("\(Int(pct))%")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(barColor)
+                    .padding(.leading, 4)
                 Text("↺ \(countdown(resetAt))")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                    .padding(.leading, 2)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(barColor.opacity(0.18))
-                        .frame(height: 6)
+                        .frame(height: 7)
                     Capsule()
                         .fill(barColor)
-                        .frame(width: geo.size.width * fill, height: 6)
+                        .frame(width: geo.size.width * fill, height: 7)
                 }
             }
-            .frame(height: 6)
+            .frame(height: 7)
         }
+        .padding(.vertical, 2)
     }
 }
 
@@ -269,65 +272,73 @@ struct ClaudeUsageEntryView: View {
                     }
                     Spacer()
                     RingView(pct: entry.session.pct, size: 82, lineWidth: 9)
-                    Spacer().frame(height: 6)
+                    Spacer().frame(height: 8)
                     Text("Current Session")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.primary)
+                        .padding(.top, 2)
                     Text("↺ \(countdown(entry.session.resetAt))")
-                        .font(.system(size: 9))
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                        .padding(.top, 2)
                     Spacer()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
 
-            // ── Medium: anneaux (inchangé) ─────────────────────────────────
+            // ── Medium: anneaux ────────────────────────────────────────────
             case .systemMedium:
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     WidgetHeader(isDemo: entry.isDemo)
+                        .padding(.bottom, 2)
                     HStack(spacing: 0) {
                         RingSection(label: "Session", pct: entry.session.pct,
                                     resetAt: entry.session.resetAt, size: 78, lineWidth: 8)
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
                         Divider().opacity(0.25)
                         RingSection(label: "Weekly", pct: entry.weekly.pct,
                                     resetAt: entry.weekly.resetAt, size: 78, lineWidth: 8)
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
                         if let s45 = entry.sonnet45 {
                             Divider().opacity(0.25)
                             RingSection(label: "Sonnet 4.5", pct: s45.pct,
                                         resetAt: s45.resetAt, size: 78, lineWidth: 8)
                                 .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4)
                         }
                     }
                 }
-                .padding(14)
+                .padding(16)
 
             // ── Large: barres pour tout ────────────────────────────────────
             default:
                 VStack(alignment: .leading, spacing: 0) {
                     WidgetHeader(isDemo: entry.isDemo)
-                    Spacer().frame(height: 16)
+                        .padding(.bottom, 6)
+                    Divider().opacity(0.15)
+                    Spacer().frame(height: 18)
                     BarView(label: "Session",
                             pct: entry.session.pct,
                             resetAt: entry.session.resetAt)
-                    Spacer().frame(height: 14)
+                    Spacer().frame(height: 18)
                     Divider().opacity(0.2)
-                    Spacer().frame(height: 14)
+                    Spacer().frame(height: 18)
                     BarView(label: "Weekly",
                             pct: entry.weekly.pct,
                             resetAt: entry.weekly.resetAt)
                     if let s45 = entry.sonnet45 {
-                        Spacer().frame(height: 14)
+                        Spacer().frame(height: 18)
                         Divider().opacity(0.2)
-                        Spacer().frame(height: 14)
+                        Spacer().frame(height: 18)
                         BarView(label: "Sonnet 4.5 Weekly",
                                 pct: s45.pct,
                                 resetAt: s45.resetAt)
                     }
                     Spacer()
                 }
-                .padding(16)
+                .padding(20)
             }
         }
         .containerBackground(for: .widget) {
