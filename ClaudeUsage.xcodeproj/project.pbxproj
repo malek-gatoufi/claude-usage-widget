@@ -11,6 +11,8 @@
 		8A98F55F2F8A90A700D7ECF2 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A98F55E2F8A90A700D7ECF2 /* SwiftUI.framework */; };
 		8A98F56E2F8A90A800D7ECF2 /* ClaudeUsageWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8A98F55A2F8A90A600D7ECF2 /* ClaudeUsageWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA000001000000000000001A /* ClaudeUsageApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000001B /* ClaudeUsageApp.swift */; };
+		BB000001000000000000001A /* DataFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000001000000000000001B /* DataFetcher.swift */; };
+		BB000001000000000000002A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000001000000000000002B /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,6 +45,9 @@
 		8A98F55C2F8A90A600D7ECF2 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		8A98F55E2F8A90A700D7ECF2 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		AA000001000000000000001B /* ClaudeUsageApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeUsageApp.swift; sourceTree = "<group>"; };
+		BB000001000000000000001B /* DataFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataFetcher.swift; sourceTree = "<group>"; };
+		BB000001000000000000002B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		BB000001000000000000003B /* ClaudeUsage.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaudeUsage.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -91,6 +96,9 @@
 			isa = PBXGroup;
 			children = (
 				AA000001000000000000001B /* ClaudeUsageApp.swift */,
+				BB000001000000000000001B /* DataFetcher.swift */,
+				BB000001000000000000002B /* SettingsView.swift */,
+				BB000001000000000000003B /* ClaudeUsage.entitlements */,
 				8A98F5602F8A90A700D7ECF2 /* ClaudeUsageWidget */,
 				8A98F55B2F8A90A600D7ECF2 /* Frameworks */,
 				8A98F5492F8A907F00D7ECF2 /* Products */,
@@ -222,6 +230,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA000001000000000000001A /* ClaudeUsageApp.swift in Sources */,
+				BB000001000000000000001A /* DataFetcher.swift in Sources */,
+				BB000001000000000000002A /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -368,6 +378,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ClaudeUsage.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -375,7 +386,6 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -400,6 +410,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ClaudeUsage.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -407,7 +418,6 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
