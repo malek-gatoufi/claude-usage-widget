@@ -30,12 +30,39 @@ actor DataFetcher {
     private static let keychainService = "com.claudeusage.apikey"
     private static let keychainAccount = "anthropic-api-key"
 
+    /// Chemin vers les credentials OAuth de Claude CLI
+    private static let credentialsPath = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/.credentials.json")
+
     private let cacheURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude-widget/usage-cache.json")
 
-    // ─── Keychain (nonisolated = sync, pas besoin d'await) ───────────
+    // ─── Auth detection (nonisolated = sync) ─────────────────────────
 
-    nonisolated var hasAPIKey: Bool { loadAPIKey() != nil }
+    nonisolated var hasAuth: Bool   { loadOAuthToken() != nil || loadAPIKey() != nil }
+
+    /// Backward-compat alias used by UsageModel
+    nonisolated var hasAPIKey: Bool { hasAuth }
+
+    // ─── OAuth (lecture de ~/.claude/.credentials.json) ──────────────
+
+    nonisolated func loadOAuthToken() -> String? {
+        guard let data = try? Data(contentsOf: DataFetcher.credentialsPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any],
+              let token = oauth["accessToken"] as? String,
+              !token.isEmpty
+        else { return nil }
+
+        // Check expiry (milliseconds)
+        if let expiresAt = oauth["expiresAt"] as? Double {
+            if expiresAt < Date().timeIntervalSince1970 * 1000 { return nil }
+        }
+        return token
+    }
+
+    // ─── Keychain (nonisolated = sync, pas besoin d'await) ───────────
 
     nonisolated func loadAPIKey() -> String? {
         let q: [CFString: Any] = [
@@ -76,19 +103,73 @@ actor DataFetcher {
     // ─── Fetch principal ──────────────────────────────────────────────
 
     func fetch() async -> CacheEntry? {
-        guard let key = loadAPIKey() else { return readCache() }
-        do {
-            let entry = try await callAPI(key: key)
-            writeCache(entry)
-            return entry
-        } catch {
-            return readCache()
+        // 1. Try OAuth (Claude Pro/Max/Team — same source as /usage command)
+        if let token = loadOAuthToken() {
+            do {
+                let entry = try await callOAuthAPI(token: token)
+                writeCache(entry)
+                return entry
+            } catch {
+                // Fall through to API key or cache
+            }
         }
+
+        // 2. Try API key fallback
+        if let key = loadAPIKey() {
+            do {
+                let entry = try await callAPIKeyFallback(key: key)
+                writeCache(entry)
+                return entry
+            } catch {
+                return readCache()
+            }
+        }
+
+        return readCache()
     }
 
-    // ─── Appel API ────────────────────────────────────────────────────
+    // ─── Méthode OAuth (GET /api/oauth/usage) ────────────────────────
 
-    private func callAPI(key: String) async throws -> CacheEntry {
+    private func callOAuthAPI(token: String) async throws -> CacheEntry {
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)",  forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        req.setValue("ClaudeUsageWidget/1.0", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 10
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw URLError(.cannotParseResponse) }
+
+        // Response: { five_hour: {utilization: 0-100, resets_at: "ISO"}, seven_day: {...}, seven_day_sonnet: {...} }
+        func metric(_ key: String) -> CacheMetric? {
+            guard let obj = json[key] as? [String: Any],
+                  let util = obj["utilization"] as? Double
+            else { return nil }
+            let resetAt = obj["resets_at"] as? String
+            return CacheMetric(pct: round(util), resetAt: resetAt)
+        }
+
+        guard let session = metric("five_hour"),
+              let weekly  = metric("seven_day")
+        else { throw URLError(.cannotParseResponse) }
+
+        return CacheEntry(
+            session:  session,
+            weekly:   weekly,
+            sonnet45: metric("seven_day_sonnet")
+        )
+    }
+
+    // ─── Fallback API key (POST /v1/messages, lit les headers) ───────
+
+    private func callAPIKeyFallback(key: String) async throws -> CacheEntry {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
         req.setValue(key,            forHTTPHeaderField: "x-api-key")
@@ -106,7 +187,6 @@ actor DataFetcher {
             throw URLError(.badServerResponse)
         }
 
-        // Headers en lowercase pour comparaison fiable
         var h = [String: String]()
         for (k, v) in http.allHeaderFields {
             if let ks = k as? String, let vs = v as? String {
@@ -126,7 +206,6 @@ actor DataFetcher {
         let pct7d = dbl("7d-utilization") * 100
         let ts7d  = tsi("7d-reset")
 
-        // Sonnet 4.5 (header modèle-spécifique, peut être absent)
         let pctS45Raw = h["anthropic-ratelimit-claude-sonnet-4-5-7d-utilization"]
                      ?? h["anthropic-ratelimit-claude-sonnet-4-5-20251001-7d-utilization"]
         let pctS45 = pctS45Raw.flatMap(Double.init).map { $0 * 100 }

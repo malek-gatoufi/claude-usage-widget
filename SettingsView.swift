@@ -4,12 +4,13 @@ import ServiceManagement
 struct SettingsView: View {
     let onSave: () -> Void
 
-    @State private var apiKeyInput:  String = ""
-    @State private var hasKey:       Bool   = false
-    @State private var statusMsg:    String = ""
-    @State private var isGreen:      Bool   = false
-    @State private var isTesting:    Bool   = false
-    @State private var launchAtLogin: Bool  = false
+    @State private var apiKeyInput:   String = ""
+    @State private var hasOAuth:      Bool   = false
+    @State private var hasKey:        Bool   = false
+    @State private var statusMsg:     String = ""
+    @State private var isGreen:       Bool   = false
+    @State private var isTesting:     Bool   = false
+    @State private var launchAtLogin: Bool   = false
 
     private let orange = Color(red: 0.81, green: 0.48, blue: 0.34)
 
@@ -27,45 +28,64 @@ struct SettingsView: View {
             }
             .padding(.bottom, 20)
 
-            // ── API Key ──────────────────────────────────────────────────
+            // ── Auth status ──────────────────────────────────────────────
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
-                    Label("Anthropic API Key", systemImage: "key.fill")
+                    Label("Authentification", systemImage: "key.fill")
                         .font(.subheadline.bold())
 
-                    if hasKey {
+                    if hasOAuth {
+                        // OAuth (Claude Pro/Max/Team) — no config needed
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                            Text("API key saved").foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Connecté via Claude Pro (OAuth)")
+                                    .foregroundStyle(.primary)
+                                Text("Les données viennent de ~/.claude/.credentials.json")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             Spacer()
-                            Button("Change") {
+                        }
+                    } else if hasKey {
+                        // API key fallback
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                            Text("Clé API sauvegardée").foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Changer") {
                                 hasKey = false; apiKeyInput = ""; statusMsg = ""
                             }
                             .buttonStyle(.borderless).foregroundStyle(orange)
                         }
                     } else {
-                        SecureField("sk-ant-api03-…", text: $apiKeyInput)
-                            .textFieldStyle(.roundedBorder)
+                        // No auth found
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Aucun token OAuth Claude trouvé.\nEntrez une clé API Anthropic en fallback :")
+                                .font(.caption).foregroundStyle(.secondary)
 
-                        HStack(alignment: .center, spacing: 10) {
-                            Button(isTesting ? "Testing…" : "Save & Test") {
-                                Task { await saveAndTest() }
-                            }
-                            .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty || isTesting)
-                            .buttonStyle(.borderedProminent)
-                            .tint(orange)
+                            SecureField("sk-ant-api03-…", text: $apiKeyInput)
+                                .textFieldStyle(.roundedBorder)
 
-                            if !statusMsg.isEmpty {
-                                Text(statusMsg)
-                                    .font(.caption)
-                                    .foregroundStyle(isGreen ? .green : .red)
+                            HStack(alignment: .center, spacing: 10) {
+                                Button(isTesting ? "Test en cours…" : "Sauvegarder & Tester") {
+                                    Task { await saveAndTest() }
+                                }
+                                .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty || isTesting)
+                                .buttonStyle(.borderedProminent)
+                                .tint(orange)
+
+                                if !statusMsg.isEmpty {
+                                    Text(statusMsg)
+                                        .font(.caption)
+                                        .foregroundStyle(isGreen ? .green : .red)
+                                }
                             }
+
+                            Link("Obtenir une clé → console.anthropic.com",
+                                 destination: URL(string: "https://console.anthropic.com/settings/keys")!)
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-
-                    Link("Obtenir une clé → console.anthropic.com",
-                         destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-                        .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(6)
             }
@@ -97,11 +117,11 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 400, height: 320)
+        .frame(width: 420, height: 340)
         .onAppear { loadState() }
     }
 
-    // ── Logo mark (même look que le widget) ────────────────────────────
+    // ── Logo mark ──────────────────────────────────────────────────────
     private var logoMark: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8).fill(orange).frame(width: 32, height: 32)
@@ -123,7 +143,8 @@ struct SettingsView: View {
 
     // ── Helpers ────────────────────────────────────────────────────────
     private func loadState() {
-        hasKey = DataFetcher.shared.hasAPIKey
+        hasOAuth = DataFetcher.shared.loadOAuthToken() != nil
+        hasKey   = DataFetcher.shared.loadAPIKey() != nil
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
