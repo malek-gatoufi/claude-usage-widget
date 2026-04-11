@@ -330,7 +330,26 @@ struct ClaudeUsageEntryView: View {
                 .padding(16)
             }
         }
-        .containerBackground(Color(NSColor.windowBackgroundColor), for: .widget)
+        .containerBackground(for: .widget) {
+            ZStack {
+                // Base verre liquide macOS 26
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                // Halo orange doux qui accentue la couleur
+                RadialGradient(
+                    colors: [cOrange.opacity(0.22), cOrange.opacity(0.06), .clear],
+                    center: .topLeading,
+                    startRadius: 0,
+                    endRadius: 160
+                )
+                // Liseré chaud en bas
+                LinearGradient(
+                    colors: [.clear, cOrange.opacity(0.10)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        }
     }
 }
 
