@@ -45,8 +45,46 @@ private func readOAuthToken() -> String? {
     return token
 }
 
+// MARK: - Cache fallback (reads main app's container cache)
+
+private struct RawMetric: Codable { var pct: Double; var resetAt: String? }
+private struct RawCache: Codable {
+    var session: RawMetric?; var weekly: RawMetric?
+    var sonnet: RawMetric?;  var sonnet45: RawMetric?
+}
+
+private func readCachedEntry() -> UsageEntry? {
+    // The main app (lekmax.ClaudeUsage) writes its cache here.
+    let url = FileManager.default.homeDirectoryForCurrentUser
+        .deletingLastPathComponent()          // …/Containers
+        .deletingLastPathComponent()          // …/lekmax.ClaudeUsageWidgetExtension
+        .appendingPathComponent("lekmax.ClaudeUsage/Data/.claude-widget/usage-cache.json")
+    guard let data = try? Data(contentsOf: url),
+          let raw  = try? JSONDecoder().decode(RawCache.self, from: data)
+    else { return nil }
+
+    func toDate(_ s: String?) -> Date? {
+        guard let s else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    }
+    func toMetric(_ m: RawMetric?) -> UsageMetric? {
+        guard let m else { return nil }
+        return UsageMetric(pct: m.pct, resetAt: toDate(m.resetAt))
+    }
+    guard let session = toMetric(raw.session),
+          let weekly  = toMetric(raw.weekly)
+    else { return nil }
+
+    return UsageEntry(date: Date(), session: session, weekly: weekly,
+                      sonnet45: toMetric(raw.sonnet45), isDemo: false)
+}
+
+// MARK: - Live fetch
+
 private func fetchLiveEntry() async -> UsageEntry? {
-    guard let token = readOAuthToken() else { return nil }
+    guard let token = readOAuthToken() else { return readCachedEntry() }
 
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
     req.httpMethod = "GET"
@@ -58,7 +96,7 @@ private func fetchLiveEntry() async -> UsageEntry? {
     guard let (data, resp) = try? await URLSession.shared.data(for: req),
           let http = resp as? HTTPURLResponse, http.statusCode == 200,
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return nil }
+    else { return readCachedEntry() }   // rate-limited or network error → use cache
 
     func isoDate(_ s: String?) -> Date? {
         guard let s else { return nil }
@@ -75,7 +113,7 @@ private func fetchLiveEntry() async -> UsageEntry? {
 
     guard let session = metric("five_hour"),
           let weekly  = metric("seven_day")
-    else { return nil }
+    else { return readCachedEntry() }
 
     return UsageEntry(date: Date(), session: session, weekly: weekly,
                       sonnet45: metric("seven_day_sonnet"), isDemo: false)
