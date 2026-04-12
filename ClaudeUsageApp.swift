@@ -53,7 +53,7 @@ final class UsageModel: ObservableObject {
             hasKey = DataFetcher.shared.hasAuth
             entry  = await DataFetcher.shared.fetch()
             // Tell WidgetKit to reload immediately after data is written
-            WidgetCenter.current.reloadAllTimelines()
+            WidgetCenter.shared.reloadAllTimelines()
         }
     }
 }
