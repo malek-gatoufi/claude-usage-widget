@@ -58,17 +58,25 @@ actor DataFetcher {
     private static let tokenURL      = "https://platform.claude.com/v1/oauth/token"
     private static let oauthScopes   = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
-    /// Reads the raw JSON stored by Claude CLI in the macOS Keychain.
-    /// Returns nil if nothing is stored or the item cannot be parsed.
+    /// Reads Claude CLI credentials JSON.
+    /// Tries ~/.claude/.credentials.json first (no permission prompt),
+    /// then falls back to the macOS Keychain.
     nonisolated private func loadClaudeKeychainJSON() -> [String: Any]? {
-        // Claude CLI stores its credentials under service "Claude Code-credentials".
-        // The account name is not known ahead of time, so we omit kSecAttrAccount and
-        // let the keychain return the first matching item.
+        // 1. File-based credentials — no Keychain permission dialog
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            let path = URL(fileURLWithPath: String(cString: dir))
+                .appendingPathComponent(".claude/.credentials.json")
+            if let data = try? Data(contentsOf: path),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                return json
+            }
+        }
+        // 2. Keychain fallback (may prompt on ad-hoc signed builds)
         let q: [CFString: Any] = [
-            kSecClass:            kSecClassGenericPassword,
-            kSecAttrService:      DataFetcher.claudeKeychainService as CFString,
-            kSecReturnData:       true,
-            kSecMatchLimit:       kSecMatchLimitOne,
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: DataFetcher.claudeKeychainService as CFString,
+            kSecReturnData:  true,
+            kSecMatchLimit:  kSecMatchLimitOne,
         ]
         var out: AnyObject?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
@@ -78,9 +86,16 @@ actor DataFetcher {
         return json
     }
 
-    /// Writes back an updated JSON blob into the same Keychain item.
-    nonisolated private func saveClaudeKeychainJSON(_ json: [String: Any]) {
+    /// Saves refreshed credentials — writes to file first, then mirrors to Keychain.
+    nonisolated private func saveClaudeCredentials(_ json: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+        // Write to file (no permission needed)
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            let path = URL(fileURLWithPath: String(cString: dir))
+                .appendingPathComponent(".claude/.credentials.json")
+            try? data.write(to: path, options: .atomic)
+        }
+        // Mirror to Keychain
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
             kSecAttrService: DataFetcher.claudeKeychainService as CFString,
@@ -143,7 +158,7 @@ actor DataFetcher {
 
         var updatedJSON = existingJSON
         updatedJSON["claudeAiOauth"] = updatedOAuth
-        saveClaudeKeychainJSON(updatedJSON)
+        saveClaudeCredentials(updatedJSON)
 
         return newToken
     }

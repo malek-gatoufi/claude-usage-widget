@@ -30,6 +30,18 @@ private let demoEntry = UsageEntry(
 )
 
 private func readOAuthToken() -> String? {
+    // 1. ~/.claude/.credentials.json — no Keychain permission dialog
+    if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+        let path = URL(fileURLWithPath: String(cString: dir))
+            .appendingPathComponent(".claude/.credentials.json")
+        if let data = try? Data(contentsOf: path),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let oauth = json["claudeAiOauth"] as? [String: Any],
+           let token = oauth["accessToken"] as? String, !token.isEmpty {
+            return token
+        }
+    }
+    // 2. Keychain fallback
     let q: [CFString: Any] = [
         kSecClass:       kSecClassGenericPassword,
         kSecAttrService: "Claude Code-credentials" as CFString,
