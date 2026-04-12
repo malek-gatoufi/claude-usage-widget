@@ -15,16 +15,30 @@ No need to open Xcode. Run from the repo root:
 ```bash
 cd claudeusage/ClaudeUsage
 
+# 1. Build
 xcodebuild -scheme ClaudeUsage -configuration Release \
   -derivedDataPath /tmp/ClaudeUsageBuild \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" DEVELOPMENT_TEAM=""
 
+# 2. Install
 cp -R /tmp/ClaudeUsageBuild/Build/Products/Release/ClaudeUsage.app /Applications/
+rm -rf /Applications/ClaudeUsage.app/ClaudeUsage.app 2>/dev/null || true
+
+# 3. Re-sign with correct entitlements (network + keychain access)
+IDENTITY=$(security find-identity -v -p codesigning | grep "Apple Development" | awk -F'"' '{print $2}' | head -1)
+codesign --force --sign "$IDENTITY" --options runtime \
+  --entitlements ClaudeUsageWidget/ClaudeUsageWidget.entitlements \
+  /Applications/ClaudeUsage.app/Contents/PlugIns/ClaudeUsageWidgetExtension.appex
+codesign --force --sign "$IDENTITY" --options runtime \
+  --entitlements ClaudeUsage.entitlements \
+  /Applications/ClaudeUsage.app
+
+# 4. Launch
 xattr -cr /Applications/ClaudeUsage.app
 open /Applications/ClaudeUsage.app
 ```
 
-> Uses ad-hoc signing (no Apple Developer account needed). The app runs locally only.
+> Requires an Apple Development certificate in your Keychain (created automatically when you sign into Xcode with your Apple ID).
 
 ---
 
