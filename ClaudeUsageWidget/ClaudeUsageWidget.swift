@@ -29,17 +29,30 @@ private let demoEntry = UsageEntry(
     isDemo:   true
 )
 
-private func oauthJSON() -> [String: Any]? {
-    let home = realHome()
-    let candidates: [URL] = [
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
-        )?.appendingPathComponent("token-cache.json"),
-        home.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/token-cache.json"),
-        home.appendingPathComponent(".claude/.credentials.json"),
-    ].compactMap { $0 }
+private let groupDefaults = UserDefaults(suiteName: "group.lekmax.ClaudeUsage")
 
-    for url in candidates {
+/// Sandbox container home — this process's own writable directory,
+/// written by the non-sandboxed LaunchAgent and always readable here.
+private let sandboxHome = FileManager.default.homeDirectoryForCurrentUser
+
+private func oauthJSON() -> [String: Any]? {
+    // 1. Our own sandbox container — written by the LaunchAgent (works with ad-hoc signing)
+    if let data = try? Data(contentsOf: sandboxHome.appendingPathComponent("token-cache.json")),
+       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        return json
+    }
+    // 2. UserDefaults App Group (works when signed with a real Team ID)
+    if let data = groupDefaults?.data(forKey: "oauth-token"),
+       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        return json
+    }
+    // 3. File-based App Group (works when signed with a real Team ID)
+    let real = realHome()
+    for url in [
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage")?.appendingPathComponent("token-cache.json"),
+        real.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/token-cache.json"),
+        real.appendingPathComponent(".claude/.credentials.json"),
+    ].compactMap({ $0 }) {
         if let data = try? Data(contentsOf: url),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return json
@@ -74,26 +87,33 @@ private func realHome() -> URL {
     return FileManager.default.homeDirectoryForCurrentUser
 }
 
-/// Try every possible cache location, return first that decodes successfully.
 private func readCachedEntry() -> UsageEntry? {
-    let home = realHome()
-    let candidates: [URL] = [
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
-        )?.appendingPathComponent("usage-cache.json"),
-        home.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/usage-cache.json"),
-        home.appendingPathComponent(".claude-widget/usage-cache.json"),
-    ].compactMap { $0 }
-
-    var raw: RawCache?
-    for url in candidates {
+    // 1. Our own sandbox container — written by LaunchAgent or a previous live fetch
+    if let data = try? Data(contentsOf: sandboxHome.appendingPathComponent("usage-cache.json")),
+       let decoded = try? JSONDecoder().decode(RawCache.self, from: data) {
+        return makeEntry(decoded)
+    }
+    // 2. UserDefaults App Group (works when signed with a real Team ID)
+    if let data = groupDefaults?.data(forKey: "usage-cache"),
+       let decoded = try? JSONDecoder().decode(RawCache.self, from: data) {
+        return makeEntry(decoded)
+    }
+    // 3. File-based App Group
+    let real = realHome()
+    for url in [
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage")?.appendingPathComponent("usage-cache.json"),
+        real.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/usage-cache.json"),
+        real.appendingPathComponent(".claude-widget/usage-cache.json"),
+    ].compactMap({ $0 }) {
         if let data = try? Data(contentsOf: url),
            let decoded = try? JSONDecoder().decode(RawCache.self, from: data) {
-            raw = decoded; break
+            return makeEntry(decoded)
         }
     }
-    guard let raw else { return nil }
+    return nil
+}
 
+private func makeEntry(_ raw: RawCache) -> UsageEntry? {
     func toDate(_ s: String?) -> Date? {
         guard let s else { return nil }
         let f = ISO8601DateFormatter()
@@ -115,6 +135,11 @@ private func readCachedEntry() -> UsageEntry? {
 // MARK: - Live fetch
 
 private func fetchLiveEntry() async -> UsageEntry? {
+    // 1. Try local proxy server (started by the LaunchAgent, no auth required).
+    //    2-second timeout keeps the widget snappy if the server isn't running.
+    if let entry = await fetchFromLocalProxy() { return entry }
+
+    // 2. Direct Anthropic API — needs the OAuth token from our sandbox container.
     guard let token = readOAuthToken() else { return readCachedEntry() }
 
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
@@ -135,19 +160,48 @@ private func fetchLiveEntry() async -> UsageEntry? {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
-    func metric(_ key: String) -> UsageMetric? {
+    func rawMetric(_ key: String) -> RawMetric? {
         guard let obj = json[key] as? [String: Any],
               let util = obj["utilization"] as? Double
         else { return nil }
-        return UsageMetric(pct: round(util), resetAt: isoDate(obj["resets_at"] as? String))
+        return RawMetric(pct: round(util), resetAt: obj["resets_at"] as? String)
+    }
+    func liveMetric(_ key: String) -> UsageMetric? {
+        guard let r = rawMetric(key) else { return nil }
+        return UsageMetric(pct: r.pct, resetAt: isoDate(r.resetAt))
     }
 
-    guard let session = metric("five_hour"),
-          let weekly  = metric("seven_day")
+    guard let session = liveMetric("five_hour"),
+          let weekly  = liveMetric("seven_day")
     else { return readCachedEntry() }
 
+    // Persist to our own sandbox container so the next timeline load has fresh data
+    let raw = RawCache(session: rawMetric("five_hour"), weekly: rawMetric("seven_day"),
+                       sonnet45: rawMetric("seven_day_sonnet"))
+    if let encoded = try? JSONEncoder().encode(raw) {
+        try? encoded.write(to: sandboxHome.appendingPathComponent("usage-cache.json"), options: .atomic)
+    }
+
     return UsageEntry(date: Date(), session: session, weekly: weekly,
-                      sonnet45: metric("seven_day_sonnet"), isDemo: false)
+                      sonnet45: liveMetric("seven_day_sonnet"), isDemo: false)
+}
+
+/// Reads from the LaunchAgent HTTP proxy on localhost (no auth, no sandbox issues).
+private func fetchFromLocalProxy() async -> UsageEntry? {
+    var req = URLRequest(url: URL(string: "http://127.0.0.1:27182/")!)
+    req.timeoutInterval = 2  // fast: if server is down, fall through quickly
+
+    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+          let http = resp as? HTTPURLResponse, http.statusCode == 200,
+          let decoded = try? JSONDecoder().decode(RawCache.self, from: data)
+    else { return nil }
+
+    // Persist to sandbox container as cache for future offline loads
+    if let encoded = try? JSONEncoder().encode(decoded) {
+        try? encoded.write(to: sandboxHome.appendingPathComponent("usage-cache.json"), options: .atomic)
+    }
+
+    return makeEntry(decoded)
 }
 
 // MARK: - Provider

@@ -121,6 +121,7 @@ actor DataFetcher {
         let isExpired = expiresAt < Date().timeIntervalSince1970 * 1000
 
         if !isExpired, let token = oauth["accessToken"] as? String, !token.isEmpty {
+            persistTokenToDefaults(json)   // keep UserDefaults in sync
             return token
         }
 
@@ -356,23 +357,33 @@ actor DataFetcher {
 
     // ─── Cache ────────────────────────────────────────────────────────
 
+    private static let groupDefaults = UserDefaults(suiteName: "group.lekmax.ClaudeUsage")
+
     private func readCache() -> CacheEntry? {
+        // Try UserDefaults first (works across sandbox boundaries via cfprefsd)
+        if let data = DataFetcher.groupDefaults?.data(forKey: "usage-cache") {
+            if let entry = try? JSONDecoder().decode(CacheEntry.self, from: data) { return entry }
+        }
+        // File fallback
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }
         return try? JSONDecoder().decode(CacheEntry.self, from: data)
     }
 
     private func writeCache(_ entry: CacheEntry) {
+        guard let data = try? JSONEncoder().encode(entry) else { return }
+        // UserDefaults — readable by widget via App Group suite
+        DataFetcher.groupDefaults?.set(data, forKey: "usage-cache")
+        DataFetcher.groupDefaults?.synchronize()
+        // File backup
         let dir = cacheURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(entry) {
-            try? data.write(to: cacheURL, options: [])
-            // Mirror to ~/.claude-widget/ so the widget can read it via temporary-exception entitlement
-            if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-                let dotWidget = URL(fileURLWithPath: String(cString: dir))
-                    .appendingPathComponent(".claude-widget")
-                try? FileManager.default.createDirectory(at: dotWidget, withIntermediateDirectories: true)
-                try? data.write(to: dotWidget.appendingPathComponent("usage-cache.json"), options: [])
-            }
-        }
+        try? data.write(to: cacheURL, options: [])
+    }
+
+    /// Also persist OAuth token to UserDefaults so widget can read it without file I/O.
+    func persistTokenToDefaults(_ json: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+        DataFetcher.groupDefaults?.set(data, forKey: "oauth-token")
+        DataFetcher.groupDefaults?.synchronize()
     }
 }
