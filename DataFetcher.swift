@@ -45,33 +45,41 @@ actor DataFetcher {
     private let cacheURL = DataFetcher.groupContainer
         .appendingPathComponent("usage-cache.json")
 
-    // ─── Auth detection (nonisolated = sync) ─────────────────────────
+    // Token cached in App Group — survives claude logout, no Keychain prompt needed
+    private let tokenCacheURL = DataFetcher.groupContainer
+        .appendingPathComponent("token-cache.json")
+
+    // ─── Auth detection ───────────────────────────────────────────────
 
     nonisolated var hasAuth: Bool   { loadOAuthToken() != nil || loadAPIKey() != nil }
-
-    /// Backward-compat alias used by UsageModel
     nonisolated var hasAPIKey: Bool { hasAuth }
 
-    // ─── OAuth (lecture + refresh depuis le Keychain "Claude Code-credentials") ───
+    // ─── OAuth ────────────────────────────────────────────────────────
 
     private static let oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let tokenURL      = "https://platform.claude.com/v1/oauth/token"
     private static let oauthScopes   = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
-    /// Reads Claude CLI credentials JSON.
-    /// Tries ~/.claude/.credentials.json first (no permission prompt),
-    /// then falls back to the macOS Keychain.
-    nonisolated private func loadClaudeKeychainJSON() -> [String: Any]? {
-        // 1. File-based credentials — no Keychain permission dialog
+    /// Priority: App Group token cache → ~/.claude/.credentials.json → Keychain
+    /// The App Group cache is written on every successful read, so after the first
+    /// run neither claude logout nor Keychain prompts interrupt the app.
+    nonisolated private func loadOAuthJSON() -> [String: Any]? {
+        // 1. App Group token cache (our own copy, always accessible, no prompts)
+        if let data = try? Data(contentsOf: tokenCacheURL),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return json
+        }
+        // 2. Claude CLI credentials file (written by `claude login`, no prompt)
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
             let path = URL(fileURLWithPath: String(cString: dir))
                 .appendingPathComponent(".claude/.credentials.json")
             if let data = try? Data(contentsOf: path),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                persistTokenCache(json)   // seed App Group cache for next time
                 return json
             }
         }
-        // 2. Keychain fallback (may prompt on ad-hoc signed builds)
+        // 3. Keychain — may prompt once on ad-hoc builds, then persists
         let q: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
             kSecAttrService: DataFetcher.claudeKeychainService as CFString,
@@ -83,30 +91,22 @@ actor DataFetcher {
               let data = out as? Data,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
+        persistTokenCache(json)           // seed App Group cache for next time
         return json
     }
 
-    /// Saves refreshed credentials — writes to file first, then mirrors to Keychain.
-    nonisolated private func saveClaudeCredentials(_ json: [String: Any]) {
+    /// Writes OAuth JSON into the App Group container so future reads never need
+    /// ~/.claude/.credentials.json or the Keychain.
+    nonisolated private func persistTokenCache(_ json: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
-        // Write to file (no permission needed)
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            let path = URL(fileURLWithPath: String(cString: dir))
-                .appendingPathComponent(".claude/.credentials.json")
-            try? data.write(to: path, options: .atomic)
-        }
-        // Mirror to Keychain
-        let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: DataFetcher.claudeKeychainService as CFString,
-        ]
-        let update: [CFString: Any] = [kSecValueData: data]
-        SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        let dir = tokenCacheURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: tokenCacheURL, options: .atomic)
     }
 
-    /// Retourne le token valide (et le rafraîchit si expiré).
+    /// Returns a valid (non-expired) token, refreshing it if needed.
     func validOAuthToken() async -> String? {
-        guard let json = loadClaudeKeychainJSON(),
+        guard let json = loadOAuthJSON(),
               let oauth = json["claudeAiOauth"] as? [String: Any]
         else { return nil }
 
@@ -117,7 +117,6 @@ actor DataFetcher {
             return token
         }
 
-        // Token expiré → refresh
         guard let refreshToken = oauth["refreshToken"] as? String, !refreshToken.isEmpty
         else { return nil }
 
@@ -130,7 +129,6 @@ actor DataFetcher {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 15
-
         let body: [String: Any] = [
             "grant_type":    "refresh_token",
             "refresh_token": refreshToken,
@@ -146,7 +144,6 @@ actor DataFetcher {
               let newToken = respJSON["access_token"] as? String
         else { return nil }
 
-        // Mettre à jour le Keychain avec le nouveau token
         let expiresIn  = respJSON["expires_in"] as? Double ?? 3600
         let newExpiry  = (Date().timeIntervalSince1970 + expiresIn) * 1000
         let newRefresh = respJSON["refresh_token"] as? String ?? refreshToken
@@ -155,17 +152,23 @@ actor DataFetcher {
         updatedOAuth["accessToken"]  = newToken
         updatedOAuth["refreshToken"] = newRefresh
         updatedOAuth["expiresAt"]    = newExpiry
-
         var updatedJSON = existingJSON
         updatedJSON["claudeAiOauth"] = updatedOAuth
-        saveClaudeCredentials(updatedJSON)
 
+        // Persist everywhere
+        persistTokenCache(updatedJSON)
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            let path = URL(fileURLWithPath: String(cString: dir))
+                .appendingPathComponent(".claude/.credentials.json")
+            if let data = try? JSONSerialization.data(withJSONObject: updatedJSON) {
+                try? data.write(to: path, options: .atomic)
+            }
+        }
         return newToken
     }
 
-    /// Sync check (pour hasAuth) — ne regarde que si le token existe dans le Keychain
     nonisolated func loadOAuthToken() -> String? {
-        guard let json = loadClaudeKeychainJSON(),
+        guard let json = loadOAuthJSON(),
               let oauth = json["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty
         else { return nil }

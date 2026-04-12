@@ -29,32 +29,44 @@ private let demoEntry = UsageEntry(
     isDemo:   true
 )
 
-private func readOAuthToken() -> String? {
-    // 1. ~/.claude/.credentials.json — no Keychain permission dialog
-    if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-        let path = URL(fileURLWithPath: String(cString: dir))
-            .appendingPathComponent(".claude/.credentials.json")
-        if let data = try? Data(contentsOf: path),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let oauth = json["claudeAiOauth"] as? [String: Any],
-           let token = oauth["accessToken"] as? String, !token.isEmpty {
-            return token
+private func oauthJSON() -> [String: Any]? {
+    // 1. App Group token cache — written by main app, no prompt, survives claude logout
+    if let groupURL = FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
+    ) {
+        let u = groupURL.appendingPathComponent("token-cache.json")
+        if let data = try? Data(contentsOf: u),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return json
         }
     }
-    // 2. Keychain fallback
-    let q: [CFString: Any] = [
-        kSecClass:       kSecClassGenericPassword,
-        kSecAttrService: "Claude Code-credentials" as CFString,
-        kSecReturnData:  true,
-        kSecMatchLimit:  kSecMatchLimitOne,
-    ]
-    var out: AnyObject?
-    guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-          let data = out as? Data,
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    // 2. Direct App Group path via getpwuid (ad-hoc signed builds)
+    if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+        let home = URL(fileURLWithPath: String(cString: dir))
+        let groupPath = home.appendingPathComponent(
+            "Library/Group Containers/group.lekmax.ClaudeUsage/token-cache.json")
+        if let data = try? Data(contentsOf: groupPath),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return json
+        }
+        // 3. Claude CLI credentials file
+        let credsPath = home.appendingPathComponent(".claude/.credentials.json")
+        if let data = try? Data(contentsOf: credsPath),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return json
+        }
+    }
+    return nil
+}
+
+private func readOAuthToken() -> String? {
+    guard let json = oauthJSON(),
           let oauth = json["claudeAiOauth"] as? [String: Any],
           let token = oauth["accessToken"] as? String, !token.isEmpty
     else { return nil }
+    // Check expiry
+    let expiresAt = oauth["expiresAt"] as? Double ?? 0
+    guard expiresAt > Date().timeIntervalSince1970 * 1000 else { return nil }
     return token
 }
 
@@ -160,12 +172,12 @@ struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> UsageEntry { demoEntry }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
-        Task { completion(await fetchLiveEntry() ?? demoEntry) }
+        Task { completion(await fetchLiveEntry() ?? readCachedEntry() ?? demoEntry) }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
         Task {
-            let entry = await fetchLiveEntry() ?? demoEntry
+            let entry = await fetchLiveEntry() ?? readCachedEntry() ?? demoEntry
             let next = Calendar.current.date(byAdding: .minute, value: 5, to: Date())!
             completion(Timeline(entries: [entry], policy: .after(next)))
         }
