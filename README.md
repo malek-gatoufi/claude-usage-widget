@@ -1,70 +1,43 @@
 # Claude Usage Widget
 
-A macOS menu bar app + desktop widget that shows your Anthropic API usage in real time.
+A native macOS menu bar app + desktop widget that shows your Anthropic Claude usage in real time — session %, weekly %, and Sonnet 4.5 weekly %.
 
-![macOS 26+](https://img.shields.io/badge/macOS-26%2B-orange) ![Swift](https://img.shields.io/badge/Swift-5-orange) ![WidgetKit](https://img.shields.io/badge/WidgetKit-macOS-orange)
+![macOS 26+](https://img.shields.io/badge/macOS-26%2B-orange) ![Swift](https://img.shields.io/badge/Swift-6-orange) ![WidgetKit](https://img.shields.io/badge/WidgetKit-macOS-orange) ![No API key required](https://img.shields.io/badge/auth-Claude%20CLI%20OAuth-green)
 
 ---
 
-## What it does
+## What it shows
 
-- **Menu bar** — shows your current session usage (%) at a glance
-- **Desktop widget** — Small / Medium / Large, with Liquid Glass background
-  - Session (5h rolling window)
-  - Weekly (7d rolling window)
-  - Sonnet 4.5 weekly (when available)
+| Metric | What it measures |
+|--------|-----------------|
+| **Session** | Rolling 5-hour usage window |
+| **Weekly** | Rolling 7-day usage window |
+| **Sonnet 4.5** | Sonnet-specific 7-day window (when applicable) |
+
+- Menu bar icon displays current session % at a glance
+- Desktop widget in Small / Medium / Large with Liquid Glass background
 - Refreshes every **5 minutes** automatically
-- **No Node.js**, no launchd setup, no Claude Code required
 
 ---
 
-## Requirements
+## Authentication
 
-| | |
-|---|---|
-| macOS | 26.3 (Tahoe) or later |
-| Xcode | 26.4 or later |
-| Anthropic API key | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+The app uses **Claude CLI's OAuth token** stored in the macOS Keychain — the same token the `/usage` command reads. No extra API key or configuration needed if you have Claude Code installed.
 
-> **Cost** — the app makes one minimal Haiku call every 5 min to read rate-limit headers.  
-> ~$0.000005/call × 288 calls/day ≈ **$0.0015/day**.
+Fallback: if no Claude CLI token is found, you can enter an Anthropic API key manually in Settings.
 
 ---
 
-## Installation
+## Quick install
 
-### 1. Clone
-
-```bash
-git clone https://github.com/malek-gatoufi/claude-usage-widget.git
-cd claude-usage-widget/claudeusage/ClaudeUsage
-```
-
-### 2. Open in Xcode
+See [INSTALL.md](INSTALL.md) for the full step-by-step guide.
 
 ```bash
+git clone <repo-url>
+cd claudeusage/ClaudeUsage
 open ClaudeUsage.xcodeproj
+# Set your Team in Signing & Capabilities, then Cmd+R
 ```
-
-### 3. Set your Team
-
-In Xcode → select the **ClaudeUsage** project → Signing & Capabilities → set your Apple Developer Team for both targets (`ClaudeUsage` and `ClaudeUsageWidgetExtension`).
-
-> Free Apple ID works — no paid developer account needed for local builds.
-
-### 4. Run
-
-Press **Cmd+R**. The app will appear in your menu bar as `…`, then switch to a percentage once configured.
-
-### 5. Enter your API key
-
-Click the `⚙` icon in the menu bar → **Réglages…** → paste your Anthropic API key → **Save & Test**.
-
-### 6. Add the widget
-
-- Right-click your desktop → Edit Widgets
-- Search for **Claude Usage**
-- Add Small, Medium, or Large
 
 ---
 
@@ -72,69 +45,34 @@ Click the `⚙` icon in the menu bar → **Réglages…** → paste your Anthrop
 
 ```
 ClaudeUsage/
-├── ClaudeUsageApp.swift          # @main + AppDelegate (menu bar)
-├── DataFetcher.swift             # URLSession → Anthropic API, keychain, cache
-├── SettingsView.swift            # Settings panel (SwiftUI)
-├── ClaudeUsage.entitlements      # Sandbox: network + home dir write
+├── ClaudeUsageApp.swift          # @main, menu bar, UsageModel (ObservableObject)
+├── DataFetcher.swift             # OAuth + API key auth, Anthropic API calls, cache
+├── SettingsView.swift            # Settings window (SwiftUI)
+├── ClaudeUsage.entitlements      # Sandbox: network.client + keychain
 └── ClaudeUsageWidget/
-    ├── ClaudeUsageWidget.swift   # Widget UI (Small / Medium / Large)
-    ├── ClaudeUsageWidget.entitlements
-    └── Info.plist
+    ├── ClaudeUsageWidget.swift   # Widget UI + live OAuth fetch
+    ├── ClaudeUsageWidget.entitlements  # Sandbox: network.client
+    └── ClaudeUsageWidgetBundle.swift
 ```
 
-### Cache file
-
-The app writes `~/.claude-widget/usage-cache.json` every 5 minutes.  
-The widget extension reads it via a sandbox entitlement (`home-relative-path.read-only`).
-
-```json
-{
-  "session":  { "pct": 25, "resetAt": "2026-04-11T21:00:00Z" },
-  "weekly":   { "pct": 21, "resetAt": "2026-04-15T19:00:00Z" },
-  "sonnet45": null
-}
-```
-
----
-
-## Architecture
-
-```
-ClaudeUsage.app (menu bar)
-  └── DataFetcher (actor)
-        ├── Keychain  →  stores API key (com.claudeusage.apikey)
-        ├── URLSession  →  POST /v1/messages (Haiku, 1 token)
-        ├── Parse headers  →  anthropic-ratelimit-unified-*
-        └── Write  →  ~/.claude-widget/usage-cache.json
-
-ClaudeUsageWidget.appex (extension)
-  └── loadEntry()  →  reads ~/.claude-widget/usage-cache.json
-        └── displays session / weekly / sonnet 4.5
-```
-
----
-
-## Distributing to teammates
-
-1. In Xcode → **Product → Archive**
-2. **Distribute App → Direct Distribution** (Developer ID signing)
-3. Share the `.app` — teammates drag it to `/Applications` and run it
-
-> First launch on a new machine: macOS Gatekeeper may block the app.  
-> Right-click → Open to bypass, or have them run:
-> ```bash
-> xattr -cr /Applications/ClaudeUsage.app
-> ```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed explanation of how everything works.
 
 ---
 
 ## FAQ
 
-**Widget shows DEMO data**  
-→ Make sure the app is running (check menu bar). After Cmd+R in Xcode the widget reloads within 30 seconds.
+**Widget shows DEMO data**
+Make sure the app is running (check menu bar). After a fresh build, kill the stale extension and let WidgetKit reload:
+```bash
+killall ClaudeUsageWidgetExtension 2>/dev/null; true
+```
+The first time the widget runs, macOS will prompt for Keychain access — click **Always Allow**.
 
-**Sonnet 4.5 bar is empty**  
-→ Anthropic doesn't yet expose a model-specific rate-limit header for Sonnet 4.5 in Haiku responses. The bar will appear automatically once the header is available.
+**Menu bar shows `⚙` (gear icon)**
+No auth found. Open Settings → either let Claude CLI OAuth be detected automatically, or enter an API key.
 
-**Can I use my Claude Desktop OAuth token instead of an API key?**  
-→ Not directly — Claude Desktop uses OAuth internally and doesn't expose it to third-party apps. Get a proper API key at [console.anthropic.com](https://console.anthropic.com/settings/keys).
+**Sonnet 4.5 metric is missing**
+Your account plan may not have a separate Sonnet quota. The field only appears when the API returns `seven_day_sonnet` data.
+
+**Build fails with signing error**
+Set your Team in Xcode → Project → Signing & Capabilities for both targets. A free Apple ID works for local builds.

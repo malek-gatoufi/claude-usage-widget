@@ -1,5 +1,6 @@
 import WidgetKit
 import SwiftUI
+import Security
 
 // MARK: - Models
 
@@ -17,74 +18,84 @@ struct UsageEntry: TimelineEntry {
     var isDemo: Bool
 }
 
-// MARK: - Cache reader
+// MARK: - Live fetch (OAuth, same source as main app)
 
-private struct RawMetric: Codable {
-    var pct: Double
-    var resetAt: String?
+private let demoEntry = UsageEntry(
+    date: Date(),
+    session:  UsageMetric(pct: 11, resetAt: Date().addingTimeInterval(3 * 3600)),
+    weekly:   UsageMetric(pct: 18, resetAt: Date().addingTimeInterval(4 * 86400)),
+    sonnet45: UsageMetric(pct: 12, resetAt: Date().addingTimeInterval(5 * 86400)),
+    isDemo:   true
+)
+
+private func readOAuthToken() -> String? {
+    let q: [CFString: Any] = [
+        kSecClass:       kSecClassGenericPassword,
+        kSecAttrService: "Claude Code-credentials" as CFString,
+        kSecReturnData:  true,
+        kSecMatchLimit:  kSecMatchLimitOne,
+    ]
+    var out: AnyObject?
+    guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+          let data = out as? Data,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let oauth = json["claudeAiOauth"] as? [String: Any],
+          let token = oauth["accessToken"] as? String, !token.isEmpty
+    else { return nil }
+    return token
 }
-private struct RawUsage: Codable {
-    var session: RawMetric?
-    var weekly: RawMetric?
-    var sonnet: RawMetric?
-    var sonnet45: RawMetric?
-    var _demo: Bool?
-}
 
-private func loadEntry() -> UsageEntry {
-    let now = Date()
-    let demo = UsageEntry(
-        date: now,
-        session:  UsageMetric(pct: 11, resetAt: now.addingTimeInterval(3 * 3600)),
-        weekly:   UsageMetric(pct: 18, resetAt: now.addingTimeInterval(4 * 86400)),
-        sonnet:   nil,
-        sonnet45: UsageMetric(pct: 12, resetAt: now.addingTimeInterval(5 * 86400)),
-        isDemo:   true
-    )
-    let url = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".claude-widget/usage-cache.json")
-    guard let data = try? Data(contentsOf: url),
-          let raw = try? JSONDecoder().decode(RawUsage.self, from: data)
-    else { return demo }
+private func fetchLiveEntry() async -> UsageEntry? {
+    guard let token = readOAuthToken() else { return nil }
 
-    func toDate(_ s: String?) -> Date? {
+    var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+    req.httpMethod = "GET"
+    req.setValue("Bearer \(token)",   forHTTPHeaderField: "Authorization")
+    req.setValue("application/json",  forHTTPHeaderField: "Content-Type")
+    req.setValue("oauth-2025-04-20",  forHTTPHeaderField: "anthropic-beta")
+    req.timeoutInterval = 10
+
+    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+          let http = resp as? HTTPURLResponse, http.statusCode == 200,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+
+    func isoDate(_ s: String?) -> Date? {
         guard let s else { return nil }
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        return ISO8601DateFormatter().date(from: s)
+        return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
-    func toMetric(_ m: RawMetric?) -> UsageMetric? {
-        guard let m else { return nil }
-        return UsageMetric(pct: m.pct, resetAt: toDate(m.resetAt))
+    func metric(_ key: String) -> UsageMetric? {
+        guard let obj = json[key] as? [String: Any],
+              let util = obj["utilization"] as? Double
+        else { return nil }
+        return UsageMetric(pct: round(util), resetAt: isoDate(obj["resets_at"] as? String))
     }
-    return UsageEntry(
-        date: now,
-        session:  toMetric(raw.session)  ?? UsageMetric(pct: 0),
-        weekly:   toMetric(raw.weekly)   ?? UsageMetric(pct: 0),
-        sonnet:   toMetric(raw.sonnet),
-        sonnet45: toMetric(raw.sonnet45),
-        isDemo:   raw._demo ?? false
-    )
+
+    guard let session = metric("five_hour"),
+          let weekly  = metric("seven_day")
+    else { return nil }
+
+    return UsageEntry(date: Date(), session: session, weekly: weekly,
+                      sonnet45: metric("seven_day_sonnet"), isDemo: false)
 }
 
 // MARK: - Provider
 
 struct Provider: TimelineProvider {
-    func placeholder(in context: Context) -> UsageEntry {
-        UsageEntry(date: Date(),
-                   session:  UsageMetric(pct: 11),
-                   weekly:   UsageMetric(pct: 18),
-                   sonnet45: UsageMetric(pct: 12),
-                   isDemo:   true)
-    }
+    func placeholder(in context: Context) -> UsageEntry { demoEntry }
+
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
-        completion(loadEntry())
+        Task { completion(await fetchLiveEntry() ?? demoEntry) }
     }
+
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
-        let entry = loadEntry()
-        let next = Calendar.current.date(byAdding: .minute, value: 5, to: Date())!
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        Task {
+            let entry = await fetchLiveEntry() ?? demoEntry
+            let next = Calendar.current.date(byAdding: .minute, value: 5, to: Date())!
+            completion(Timeline(entries: [entry], policy: .after(next)))
+        }
     }
 }
 

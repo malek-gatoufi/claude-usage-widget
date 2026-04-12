@@ -30,12 +30,16 @@ actor DataFetcher {
     private static let keychainService = "com.claudeusage.apikey"
     private static let keychainAccount = "anthropic-api-key"
 
-    /// Chemin vers les credentials OAuth de Claude CLI
-    private static let credentialsPath = FileManager.default
-        .homeDirectoryForCurrentUser
-        .appendingPathComponent(".claude/.credentials.json")
+    /// Service name used by Claude CLI to store OAuth credentials in the macOS Keychain
+    private static let claudeKeychainService = "Claude Code-credentials"
 
-    private let cacheURL = FileManager.default.homeDirectoryForCurrentUser
+    /// Real home directory — bypasses the sandbox container redirect.
+    /// `homeDirectoryForCurrentUser` silently returns the app's container in sandbox;
+    /// "/Users/<login>" is constructed from fixed system prefix + identity (not a path lookup).
+    private static let realHomeDir: URL =
+        URL(fileURLWithPath: "/Users").appendingPathComponent(NSUserName())
+
+    private let cacheURL = DataFetcher.realHomeDir
         .appendingPathComponent(".claude-widget/usage-cache.json")
 
     // ─── Auth detection (nonisolated = sync) ─────────────────────────
@@ -45,16 +49,46 @@ actor DataFetcher {
     /// Backward-compat alias used by UsageModel
     nonisolated var hasAPIKey: Bool { hasAuth }
 
-    // ─── OAuth (lecture + refresh de ~/.claude/.credentials.json) ──────
+    // ─── OAuth (lecture + refresh depuis le Keychain "Claude Code-credentials") ───
 
     private static let oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let tokenURL      = "https://platform.claude.com/v1/oauth/token"
     private static let oauthScopes   = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
+    /// Reads the raw JSON stored by Claude CLI in the macOS Keychain.
+    /// Returns nil if nothing is stored or the item cannot be parsed.
+    nonisolated private func loadClaudeKeychainJSON() -> [String: Any]? {
+        // Claude CLI stores its credentials under service "Claude Code-credentials".
+        // The account name is not known ahead of time, so we omit kSecAttrAccount and
+        // let the keychain return the first matching item.
+        let q: [CFString: Any] = [
+            kSecClass:            kSecClassGenericPassword,
+            kSecAttrService:      DataFetcher.claudeKeychainService as CFString,
+            kSecReturnData:       true,
+            kSecMatchLimit:       kSecMatchLimitOne,
+        ]
+        var out: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json
+    }
+
+    /// Writes back an updated JSON blob into the same Keychain item.
+    nonisolated private func saveClaudeKeychainJSON(_ json: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+        let query: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: DataFetcher.claudeKeychainService as CFString,
+        ]
+        let update: [CFString: Any] = [kSecValueData: data]
+        SecItemUpdate(query as CFDictionary, update as CFDictionary)
+    }
+
     /// Retourne le token valide (et le rafraîchit si expiré).
     func validOAuthToken() async -> String? {
-        guard let data = try? Data(contentsOf: DataFetcher.credentialsPath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = loadClaudeKeychainJSON(),
               let oauth = json["claudeAiOauth"] as? [String: Any]
         else { return nil }
 
@@ -94,10 +128,10 @@ actor DataFetcher {
               let newToken = respJSON["access_token"] as? String
         else { return nil }
 
-        // Mettre à jour ~/.claude/.credentials.json avec le nouveau token
-        let expiresIn   = respJSON["expires_in"] as? Double ?? 3600
-        let newExpiry   = (Date().timeIntervalSince1970 + expiresIn) * 1000
-        let newRefresh  = respJSON["refresh_token"] as? String ?? refreshToken
+        // Mettre à jour le Keychain avec le nouveau token
+        let expiresIn  = respJSON["expires_in"] as? Double ?? 3600
+        let newExpiry  = (Date().timeIntervalSince1970 + expiresIn) * 1000
+        let newRefresh = respJSON["refresh_token"] as? String ?? refreshToken
 
         var updatedOAuth = existingJSON["claudeAiOauth"] as? [String: Any] ?? [:]
         updatedOAuth["accessToken"]  = newToken
@@ -106,18 +140,14 @@ actor DataFetcher {
 
         var updatedJSON = existingJSON
         updatedJSON["claudeAiOauth"] = updatedOAuth
-
-        if let newData = try? JSONSerialization.data(withJSONObject: updatedJSON, options: .prettyPrinted) {
-            try? newData.write(to: DataFetcher.credentialsPath, options: .atomic)
-        }
+        saveClaudeKeychainJSON(updatedJSON)
 
         return newToken
     }
 
-    /// Sync check (pour hasAuth) — ne regarde que si le fichier existe, pas l'expiry
+    /// Sync check (pour hasAuth) — ne regarde que si le token existe dans le Keychain
     nonisolated func loadOAuthToken() -> String? {
-        guard let data = try? Data(contentsOf: DataFetcher.credentialsPath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let json = loadClaudeKeychainJSON(),
               let oauth = json["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty
         else { return nil }
@@ -303,7 +333,7 @@ actor DataFetcher {
         let dir = cacheURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(entry) {
-            try? data.write(to: cacheURL, options: .atomic)
+            try? data.write(to: cacheURL, options: [])
         }
     }
 }
