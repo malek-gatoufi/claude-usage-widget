@@ -33,13 +33,9 @@ actor DataFetcher {
     /// Service name used by Claude CLI to store OAuth credentials in the macOS Keychain
     private static let claudeKeychainService = "Claude Code-credentials"
 
-    /// Real home directory — bypasses the sandbox container redirect.
-    /// `homeDirectoryForCurrentUser` silently returns the app's container in sandbox;
-    /// "/Users/<login>" is constructed from fixed system prefix + identity (not a path lookup).
-    private static let realHomeDir: URL =
-        URL(fileURLWithPath: "/Users").appendingPathComponent(NSUserName())
-
-    private let cacheURL = DataFetcher.realHomeDir
+    /// Cache lives in the app's sandbox container — the widget fetches live via OAuth
+    /// so no shared file is needed; this is only used as a fallback for the menu bar app.
+    private let cacheURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude-widget/usage-cache.json")
 
     // ─── Auth detection (nonisolated = sync) ─────────────────────────
