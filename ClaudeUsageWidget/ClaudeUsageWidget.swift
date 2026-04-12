@@ -1,6 +1,7 @@
 import WidgetKit
 import SwiftUI
 import Security
+import Darwin
 
 // MARK: - Models
 
@@ -45,7 +46,7 @@ private func readOAuthToken() -> String? {
     return token
 }
 
-// MARK: - Cache fallback (reads main app's container cache)
+// MARK: - Cache fallback (App Group shared container)
 
 private struct RawMetric: Codable { var pct: Double; var resetAt: String? }
 private struct RawCache: Codable {
@@ -53,12 +54,34 @@ private struct RawCache: Codable {
     var sonnet: RawMetric?;  var sonnet45: RawMetric?
 }
 
+private func realHomeURL() -> URL {
+    // In a sandboxed extension, homeDirectoryForCurrentUser returns the container.
+    // getpwuid returns the real user home directory.
+    if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+        return URL(fileURLWithPath: String(cString: dir))
+    }
+    return FileManager.default.homeDirectoryForCurrentUser
+}
+
+private func cacheURL() -> URL? {
+    // 1. App Group container (works with properly provisioned signing)
+    if let groupURL = FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
+    ) {
+        let u = groupURL.appendingPathComponent("usage-cache.json")
+        if FileManager.default.fileExists(atPath: u.path) { return u }
+    }
+    // 2. Real home dir via getpwuid (works with ad-hoc + temporary-exception entitlement)
+    let realHome = realHomeURL()
+    let groupPath = realHome.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/usage-cache.json")
+    if FileManager.default.fileExists(atPath: groupPath.path) { return groupPath }
+    let dotWidget = realHome.appendingPathComponent(".claude-widget/usage-cache.json")
+    if FileManager.default.fileExists(atPath: dotWidget.path) { return dotWidget }
+    return nil
+}
+
 private func readCachedEntry() -> UsageEntry? {
-    // The main app (lekmax.ClaudeUsage) writes its cache here.
-    let url = FileManager.default.homeDirectoryForCurrentUser
-        .deletingLastPathComponent()          // …/Containers
-        .deletingLastPathComponent()          // …/lekmax.ClaudeUsageWidgetExtension
-        .appendingPathComponent("lekmax.ClaudeUsage/Data/.claude-widget/usage-cache.json")
+    guard let url = cacheURL() else { return nil }
     guard let data = try? Data(contentsOf: url),
           let raw  = try? JSONDecoder().decode(RawCache.self, from: data)
     else { return nil }

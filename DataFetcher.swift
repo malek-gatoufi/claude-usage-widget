@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Darwin
 
 // MARK: - Models (partagés avec le widget via fichier JSON)
 
@@ -33,10 +34,16 @@ actor DataFetcher {
     /// Service name used by Claude CLI to store OAuth credentials in the macOS Keychain
     private static let claudeKeychainService = "Claude Code-credentials"
 
-    /// Cache lives in the app's sandbox container — the widget fetches live via OAuth
-    /// so no shared file is needed; this is only used as a fallback for the menu bar app.
-    private let cacheURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".claude-widget/usage-cache.json")
+    /// Shared App Group container — accessible to both the main app and the widget extension.
+    private static let groupContainer: URL = {
+        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage") {
+            return url
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }()
+
+    private let cacheURL = DataFetcher.groupContainer
+        .appendingPathComponent("usage-cache.json")
 
     // ─── Auth detection (nonisolated = sync) ─────────────────────────
 
@@ -334,6 +341,13 @@ actor DataFetcher {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(entry) {
             try? data.write(to: cacheURL, options: [])
+            // Mirror to ~/.claude-widget/ so the widget can read it via temporary-exception entitlement
+            if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+                let dotWidget = URL(fileURLWithPath: String(cString: dir))
+                    .appendingPathComponent(".claude-widget")
+                try? FileManager.default.createDirectory(at: dotWidget, withIntermediateDirectories: true)
+                try? data.write(to: dotWidget.appendingPathComponent("usage-cache.json"), options: [])
+            }
         }
     }
 }

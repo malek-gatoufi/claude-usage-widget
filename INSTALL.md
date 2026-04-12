@@ -2,134 +2,66 @@
 
 ## Requirements
 
-- macOS 26.3 (Tahoe) or later
-- Xcode 26 or later (free from the Mac App Store)
-- Claude Code CLI installed — **or** an Anthropic API key
+- macOS 14 (Sonoma) or later
+- Xcode (any recent version — free from the Mac App Store)
+- Claude Code CLI installed and logged in (`claude login`)
+
+No paid Apple Developer account needed.
 
 ---
 
-## Option A — Command line (one shot)
+## Quick install (one command)
 
-No need to open Xcode. Run from the repo root:
+From the repo root:
 
 ```bash
 cd claudeusage/ClaudeUsage
-
-# 1. Build
-xcodebuild -scheme ClaudeUsage -configuration Release \
-  -derivedDataPath /tmp/ClaudeUsageBuild \
-  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" DEVELOPMENT_TEAM=""
-
-# 2. Install
-cp -R /tmp/ClaudeUsageBuild/Build/Products/Release/ClaudeUsage.app /Applications/
-rm -rf /Applications/ClaudeUsage.app/ClaudeUsage.app 2>/dev/null || true
-
-# 3. Re-sign with correct entitlements (network + keychain access)
-IDENTITY=$(security find-identity -v -p codesigning | grep "Apple Development" | awk -F'"' '{print $2}' | head -1)
-codesign --force --sign "$IDENTITY" --options runtime \
-  --entitlements ClaudeUsageWidget/ClaudeUsageWidget.entitlements \
-  /Applications/ClaudeUsage.app/Contents/PlugIns/ClaudeUsageWidgetExtension.appex
-codesign --force --sign "$IDENTITY" --options runtime \
-  --entitlements ClaudeUsage.entitlements \
-  /Applications/ClaudeUsage.app
-
-# 4. Launch
-xattr -cr /Applications/ClaudeUsage.app
-open /Applications/ClaudeUsage.app
+bash install.sh
 ```
 
-> Requires an Apple Development certificate in your Keychain (created automatically when you sign into Xcode with your Apple ID).
+That's it. The script builds, signs (ad-hoc), installs to `/Applications`, registers the widget, and launches the app.
 
 ---
 
-## Option B — Xcode (recommended for development)
+## What happens after launch
 
-### Step 1 — Clone the repo
+1. **Menu bar icon** — shows your current session % (e.g. `42%`). If you're not logged into Claude Code, it shows `⚙`.
 
-```bash
-git clone <repo-url>
-cd claudeusage/ClaudeUsage
-```
+2. **Desktop widget** — right-click your desktop → **Edit Widgets** → search **Claude Usage** → pick Small / Medium / Large.
+
+3. **If the widget shows DEMO**, kill the extension and let WidgetKit reload it:
+   ```bash
+   killall ClaudeUsageWidgetExtension
+   ```
 
 ---
 
-### Step 2 — Open in Xcode
+## Keychain permission
+
+On first launch macOS will prompt:
+
+> *"ClaudeUsage wants to use the 'Claude Code-credentials' keychain item."*
+
+Click **Always Allow**. This lets the app read the OAuth token stored by Claude Code CLI without you needing to enter an API key.
+
+---
+
+## Install via Xcode (for development)
 
 ```bash
 open ClaudeUsage.xcodeproj
 ```
 
----
+1. Select the **ClaudeUsage** project → **Signing & Capabilities**
+2. Set your Apple Developer Team for both targets (`ClaudeUsage` and `ClaudeUsageWidgetExtension`)
+3. Press **Cmd+R**
 
-### Step 3 — Set your signing team
-
-In Xcode, select the **ClaudeUsage** project in the navigator, then open **Signing & Capabilities**.
-
-Set your Apple Developer Team for **both** targets:
-- `ClaudeUsage`
-- `ClaudeUsageWidgetExtension`
-
-> A free Apple ID is enough for local development builds — no paid membership required.
-
-If Xcode shows a bundle ID conflict, change the bundle identifier to something unique, e.g. `com.yourname.ClaudeUsage`.
+A free Apple ID is sufficient — no paid membership required.
 
 ---
 
-### Step 4 — Build and run
-
-Press **Cmd+R** (or Product → Run).
-
-The app will appear in your menu bar. On the very first run, macOS will show two permission dialogs:
-
-1. **Keychain access** — "ClaudeUsage wants to use the 'Claude Code-credentials' keychain item." → click **Always Allow**
-2. **Widget Keychain access** — same prompt for the widget extension → click **Always Allow**
-
----
-
-## Step 5 — Check the menu bar
-
-If you have Claude Code installed and are logged in, the menu bar icon will immediately switch from `⚙` to your current session percentage (e.g. `6%`).
-
-If no Claude CLI token is found, the icon stays `⚙`. Open Settings:
-
-```
-Menu bar icon → Réglages… → paste your Anthropic API key → Save & Test
-```
-
-Get an API key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys).
-
----
-
-## Step 6 — Add the desktop widget
-
-1. Right-click your macOS desktop → **Edit Widgets**
-2. Search for **Claude Usage**
-3. Choose Small, Medium, or Large and click **+**
-
-The widget calls the API directly — no extra configuration needed.
-
-If the widget shows **DEMO** after the first install, kill the stale process and let WidgetKit respawn it:
+## Uninstall
 
 ```bash
-killall ClaudeUsageWidgetExtension 2>/dev/null; true
+killall ClaudeUsage 2>/dev/null; rm -rf /Applications/ClaudeUsage.app
 ```
-
----
-
-## Optional — Launch at login
-
-Open the app → menu bar icon → **Réglages…** → toggle **Lancer au démarrage**.
-
----
-
-## Distributing to teammates (without Xcode)
-
-1. In Xcode → **Product → Archive**
-2. **Distribute App → Direct Distribution** (requires a Developer ID certificate)
-3. Share the `.app` bundle
-
-On the recipient's machine, if Gatekeeper blocks the app:
-```bash
-xattr -cr /Applications/ClaudeUsage.app
-```
-Then right-click → Open.
