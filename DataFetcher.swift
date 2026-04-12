@@ -45,20 +45,82 @@ actor DataFetcher {
     /// Backward-compat alias used by UsageModel
     nonisolated var hasAPIKey: Bool { hasAuth }
 
-    // ─── OAuth (lecture de ~/.claude/.credentials.json) ──────────────
+    // ─── OAuth (lecture + refresh de ~/.claude/.credentials.json) ──────
 
+    private static let oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    private static let tokenURL      = "https://platform.claude.com/v1/oauth/token"
+    private static let oauthScopes   = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+
+    /// Retourne le token valide (et le rafraîchit si expiré).
+    func validOAuthToken() async -> String? {
+        guard let data = try? Data(contentsOf: DataFetcher.credentialsPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any]
+        else { return nil }
+
+        let expiresAt = oauth["expiresAt"] as? Double ?? 0
+        let isExpired = expiresAt < Date().timeIntervalSince1970 * 1000
+
+        if !isExpired, let token = oauth["accessToken"] as? String, !token.isEmpty {
+            return token
+        }
+
+        // Token expiré → refresh
+        guard let refreshToken = oauth["refreshToken"] as? String, !refreshToken.isEmpty
+        else { return nil }
+
+        return await refreshOAuthToken(refreshToken: refreshToken, existingJSON: json)
+    }
+
+    private func refreshOAuthToken(refreshToken: String, existingJSON: [String: Any]) async -> String? {
+        guard let url = URL(string: DataFetcher.tokenURL) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+
+        let body: [String: Any] = [
+            "grant_type":    "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id":     DataFetcher.oauthClientID,
+            "scope":         DataFetcher.oauthScopes,
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = bodyData
+
+        guard let (respData, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let respJSON = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+              let newToken = respJSON["access_token"] as? String
+        else { return nil }
+
+        // Mettre à jour ~/.claude/.credentials.json avec le nouveau token
+        let expiresIn   = respJSON["expires_in"] as? Double ?? 3600
+        let newExpiry   = (Date().timeIntervalSince1970 + expiresIn) * 1000
+        let newRefresh  = respJSON["refresh_token"] as? String ?? refreshToken
+
+        var updatedOAuth = existingJSON["claudeAiOauth"] as? [String: Any] ?? [:]
+        updatedOAuth["accessToken"]  = newToken
+        updatedOAuth["refreshToken"] = newRefresh
+        updatedOAuth["expiresAt"]    = newExpiry
+
+        var updatedJSON = existingJSON
+        updatedJSON["claudeAiOauth"] = updatedOAuth
+
+        if let newData = try? JSONSerialization.data(withJSONObject: updatedJSON, options: .prettyPrinted) {
+            try? newData.write(to: DataFetcher.credentialsPath, options: .atomic)
+        }
+
+        return newToken
+    }
+
+    /// Sync check (pour hasAuth) — ne regarde que si le fichier existe, pas l'expiry
     nonisolated func loadOAuthToken() -> String? {
         guard let data = try? Data(contentsOf: DataFetcher.credentialsPath),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = json["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String,
-              !token.isEmpty
+              let token = oauth["accessToken"] as? String, !token.isEmpty
         else { return nil }
-
-        // Check expiry (milliseconds)
-        if let expiresAt = oauth["expiresAt"] as? Double {
-            if expiresAt < Date().timeIntervalSince1970 * 1000 { return nil }
-        }
         return token
     }
 
@@ -104,7 +166,7 @@ actor DataFetcher {
 
     func fetch() async -> CacheEntry? {
         // 1. Try OAuth (Claude Pro/Max/Team — same source as /usage command)
-        if let token = loadOAuthToken() {
+        if let token = await validOAuthToken() {
             do {
                 let entry = try await callOAuthAPI(token: token)
                 writeCache(entry)
