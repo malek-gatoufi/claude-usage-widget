@@ -20,11 +20,14 @@ A native macOS menu bar app + desktop widget that shows your Anthropic Claude us
 
 ---
 
-## Authentication
+## Authentication & cost
 
-The app uses **Claude CLI's OAuth token** stored in the macOS Keychain — the same token the `/usage` command reads. No extra API key or configuration needed if you have Claude Code installed.
+| Mode | How it works | Cost |
+|------|-------------|------|
+| **OAuth** (default) | Reads Claude CLI's token from the macOS Keychain, calls `GET /api/oauth/usage` — a read-only monitoring endpoint | **Free** — no tokens generated |
+| **API key** (fallback) | Sends one minimal Haiku request (1 output token) to read rate-limit response headers | ~$0.0015/day |
 
-Fallback: if no Claude CLI token is found, you can enter an Anthropic API key manually in Settings.
+If you have Claude Code installed and are logged in, the app uses OAuth automatically. No configuration needed.
 
 ---
 
