@@ -195,18 +195,22 @@ actor DataFetcher {
     // ─── Fetch principal ──────────────────────────────────────────────
 
     func fetch() async -> CacheEntry? {
-        // 1. Try OAuth (Claude Pro/Max/Team — same source as /usage command)
+        // 1. OAuth path (Claude Pro/Max/Team — same source as /usage command)
+        //    If an OAuth token exists, never fall back to API key — the API key
+        //    returns its own rate-limit headers which are unrelated to subscription usage.
         if let token = await validOAuthToken() {
             do {
                 let entry = try await callOAuthAPI(token: token)
                 writeCache(entry)
                 return entry
             } catch {
-                // Fall through to API key or cache
+                // OAuth token present but API call failed (e.g. 429 rate limit).
+                // Return last cached value so we don't show stale API key data.
+                return readCache()
             }
         }
 
-        // 2. Try API key fallback
+        // 2. API key fallback (only when no OAuth token at all)
         if let key = loadAPIKey() {
             do {
                 let entry = try await callAPIKeyFallback(key: key)
