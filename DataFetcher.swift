@@ -36,8 +36,15 @@ actor DataFetcher {
 
     /// Shared App Group container — accessible to both the main app and the widget extension.
     private static let groupContainer: URL = {
+        // 1. Proper App Group (works with provisioned signing)
         if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage") {
             return url
+        }
+        // 2. Direct path via getpwuid — works with ad-hoc signing where
+        //    containerURL returns nil or sandbox-redirected home
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir))
+                .appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage")
         }
         return FileManager.default.homeDirectoryForCurrentUser
     }()
