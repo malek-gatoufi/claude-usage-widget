@@ -30,28 +30,17 @@ private let demoEntry = UsageEntry(
 )
 
 private func oauthJSON() -> [String: Any]? {
-    // 1. App Group token cache — written by main app, no prompt, survives claude logout
-    if let groupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
-    ) {
-        let u = groupURL.appendingPathComponent("token-cache.json")
-        if let data = try? Data(contentsOf: u),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return json
-        }
-    }
-    // 2. Direct App Group path via getpwuid (ad-hoc signed builds)
-    if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-        let home = URL(fileURLWithPath: String(cString: dir))
-        let groupPath = home.appendingPathComponent(
-            "Library/Group Containers/group.lekmax.ClaudeUsage/token-cache.json")
-        if let data = try? Data(contentsOf: groupPath),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return json
-        }
-        // 3. Claude CLI credentials file
-        let credsPath = home.appendingPathComponent(".claude/.credentials.json")
-        if let data = try? Data(contentsOf: credsPath),
+    let home = realHome()
+    let candidates: [URL] = [
+        FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
+        )?.appendingPathComponent("token-cache.json"),
+        home.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/token-cache.json"),
+        home.appendingPathComponent(".claude/.credentials.json"),
+    ].compactMap { $0 }
+
+    for url in candidates {
+        if let data = try? Data(contentsOf: url),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return json
         }
@@ -78,37 +67,32 @@ private struct RawCache: Codable {
     var sonnet: RawMetric?;  var sonnet45: RawMetric?
 }
 
-private func realHomeURL() -> URL {
-    // In a sandboxed extension, homeDirectoryForCurrentUser returns the container.
-    // getpwuid returns the real user home directory.
+private func realHome() -> URL {
     if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
         return URL(fileURLWithPath: String(cString: dir))
     }
     return FileManager.default.homeDirectoryForCurrentUser
 }
 
-private func cacheURL() -> URL? {
-    // 1. App Group container (works with properly provisioned signing)
-    if let groupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
-    ) {
-        let u = groupURL.appendingPathComponent("usage-cache.json")
-        if FileManager.default.fileExists(atPath: u.path) { return u }
-    }
-    // 2. Real home dir via getpwuid (works with ad-hoc + temporary-exception entitlement)
-    let realHome = realHomeURL()
-    let groupPath = realHome.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/usage-cache.json")
-    if FileManager.default.fileExists(atPath: groupPath.path) { return groupPath }
-    let dotWidget = realHome.appendingPathComponent(".claude-widget/usage-cache.json")
-    if FileManager.default.fileExists(atPath: dotWidget.path) { return dotWidget }
-    return nil
-}
-
+/// Try every possible cache location, return first that decodes successfully.
 private func readCachedEntry() -> UsageEntry? {
-    guard let url = cacheURL() else { return nil }
-    guard let data = try? Data(contentsOf: url),
-          let raw  = try? JSONDecoder().decode(RawCache.self, from: data)
-    else { return nil }
+    let home = realHome()
+    let candidates: [URL] = [
+        FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.lekmax.ClaudeUsage"
+        )?.appendingPathComponent("usage-cache.json"),
+        home.appendingPathComponent("Library/Group Containers/group.lekmax.ClaudeUsage/usage-cache.json"),
+        home.appendingPathComponent(".claude-widget/usage-cache.json"),
+    ].compactMap { $0 }
+
+    var raw: RawCache?
+    for url in candidates {
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode(RawCache.self, from: data) {
+            raw = decoded; break
+        }
+    }
+    guard let raw else { return nil }
 
     func toDate(_ s: String?) -> Date? {
         guard let s else { return nil }
