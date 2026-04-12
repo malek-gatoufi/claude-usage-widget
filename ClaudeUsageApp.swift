@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import WidgetKit
 
 // MARK: - Entry point
 
@@ -22,7 +23,7 @@ struct ClaudeUsageApp: App {
             SettingsView { model.refresh() }
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: 400, height: 320)
+        .defaultSize(width: 420, height: 340)
     }
 }
 
@@ -51,6 +52,8 @@ final class UsageModel: ObservableObject {
         Task {
             hasKey = DataFetcher.shared.hasAuth
             entry  = await DataFetcher.shared.fetch()
+            // Tell WidgetKit to reload immediately after data is written
+            WidgetCenter.current.reloadAllTimelines()
         }
     }
 }
