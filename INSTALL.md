@@ -8,7 +8,29 @@
 
 ---
 
-## Step 1 — Clone the repo
+## Option A — Command line (one shot)
+
+No need to open Xcode. Run from the repo root:
+
+```bash
+cd claudeusage/ClaudeUsage
+
+xcodebuild -scheme ClaudeUsage -configuration Release \
+  -derivedDataPath /tmp/ClaudeUsageBuild \
+  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" DEVELOPMENT_TEAM=""
+
+cp -R /tmp/ClaudeUsageBuild/Build/Products/Release/ClaudeUsage.app /Applications/
+xattr -cr /Applications/ClaudeUsage.app
+open /Applications/ClaudeUsage.app
+```
+
+> Uses ad-hoc signing (no Apple Developer account needed). The app runs locally only.
+
+---
+
+## Option B — Xcode (recommended for development)
+
+### Step 1 — Clone the repo
 
 ```bash
 git clone <repo-url>
@@ -17,7 +39,7 @@ cd claudeusage/ClaudeUsage
 
 ---
 
-## Step 2 — Open in Xcode
+### Step 2 — Open in Xcode
 
 ```bash
 open ClaudeUsage.xcodeproj
@@ -25,7 +47,7 @@ open ClaudeUsage.xcodeproj
 
 ---
 
-## Step 3 — Set your signing team
+### Step 3 — Set your signing team
 
 In Xcode, select the **ClaudeUsage** project in the navigator, then open **Signing & Capabilities**.
 
@@ -39,7 +61,7 @@ If Xcode shows a bundle ID conflict, change the bundle identifier to something u
 
 ---
 
-## Step 4 — Build and run
+### Step 4 — Build and run
 
 Press **Cmd+R** (or Product → Run).
 
