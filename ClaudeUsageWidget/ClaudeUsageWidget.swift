@@ -16,6 +16,7 @@ struct UsageEntry: TimelineEntry {
     var weekly: UsageMetric
     var sonnet: UsageMetric?
     var sonnet45: UsageMetric?
+    var extra: UsageMetric?
     var isDemo: Bool
 }
 
@@ -78,6 +79,7 @@ private struct RawMetric: Codable { var pct: Double; var resetAt: String? }
 private struct RawCache: Codable {
     var session: RawMetric?; var weekly: RawMetric?
     var sonnet: RawMetric?;  var sonnet45: RawMetric?
+    var extra: RawMetric?
 }
 
 private func realHome() -> URL {
@@ -129,7 +131,8 @@ private func makeEntry(_ raw: RawCache) -> UsageEntry? {
     else { return nil }
 
     return UsageEntry(date: Date(), session: session, weekly: weekly,
-                      sonnet45: toMetric(raw.sonnet45), isDemo: false)
+                      sonnet45: toMetric(raw.sonnet45),
+                      extra: toMetric(raw.extra), isDemo: false)
 }
 
 // MARK: - Live fetch
@@ -170,20 +173,34 @@ private func fetchLiveEntry() async -> UsageEntry? {
         guard let r = rawMetric(key) else { return nil }
         return UsageMetric(pct: r.pct, resetAt: isoDate(r.resetAt))
     }
+    func rawExtra() -> RawMetric? {
+        guard let obj = json["extra_usage"] as? [String: Any],
+              let enabled = obj["is_enabled"] as? Bool, enabled,
+              let util = obj["utilization"] as? Double
+        else { return nil }
+        var comps = Calendar.current.dateComponents([.year, .month], from: Date())
+        comps.month = (comps.month ?? 1) + 1
+        if (comps.month ?? 1) > 12 { comps.month = 1; comps.year = (comps.year ?? 2026) + 1 }
+        comps.day = 1
+        let d = Calendar.current.date(from: comps) ?? Date().addingTimeInterval(30 * 86400)
+        return RawMetric(pct: min(util, 100), resetAt: ISO8601DateFormatter().string(from: d))
+    }
 
     guard let session = liveMetric("five_hour"),
           let weekly  = liveMetric("seven_day")
     else { return readCachedEntry() }
 
-    // Persist to our own sandbox container so the next timeline load has fresh data
+    let extraRaw = rawExtra()
     let raw = RawCache(session: rawMetric("five_hour"), weekly: rawMetric("seven_day"),
-                       sonnet45: rawMetric("seven_day_sonnet"))
+                       sonnet45: rawMetric("seven_day_sonnet"), extra: extraRaw)
     if let encoded = try? JSONEncoder().encode(raw) {
         try? encoded.write(to: sandboxHome.appendingPathComponent("usage-cache.json"), options: .atomic)
     }
 
     return UsageEntry(date: Date(), session: session, weekly: weekly,
-                      sonnet45: liveMetric("seven_day_sonnet"), isDemo: false)
+                      sonnet45: liveMetric("seven_day_sonnet"),
+                      extra: extraRaw.map { UsageMetric(pct: $0.pct, resetAt: isoDate($0.resetAt)) },
+                      isDemo: false)
 }
 
 /// Reads from the LaunchAgent HTTP proxy on localhost (no auth, no sandbox issues).
@@ -469,6 +486,14 @@ struct ClaudeUsageEntryView: View {
                         BarView(label: "Sonnet 4.5 Weekly",
                                 pct: s45.pct,
                                 resetAt: s45.resetAt)
+                    }
+                    if let ex = entry.extra {
+                        Spacer().frame(height: 18)
+                        Divider().opacity(0.2)
+                        Spacer().frame(height: 18)
+                        BarView(label: "Extra Usage",
+                                pct: ex.pct,
+                                resetAt: ex.resetAt)
                     }
                     Spacer()
                 }

@@ -75,6 +75,10 @@ struct MenuBarContent: View {
                 Text("Sonnet 4.5   \(Int(s.pct))%   ↺ \(eta(s.resetAtDate))")
                     .foregroundStyle(.secondary)
             }
+            if let ex = e.extra {
+                Text("Extra   \(Int(ex.pct))%   ↺ \(eta(ex.resetAtDate))")
+                    .foregroundStyle(.secondary)
+            }
             Divider()
             Button("Actualiser") { model.refresh() }
         } else if !model.hasKey {

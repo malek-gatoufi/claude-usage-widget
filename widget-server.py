@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
@@ -161,6 +162,19 @@ def refresh_cache() -> None:
     sonnet45 = metric("seven_day_sonnet")
     if sonnet45:
         new_cache["sonnet45"] = sonnet45
+
+    # extra_usage: pay-as-you-go, resets on the 1st of next month
+    extra_obj = data.get("extra_usage") or {}
+    if extra_obj.get("is_enabled") and extra_obj.get("utilization") is not None:
+        now = datetime.now(timezone.utc)
+        if now.month == 12:
+            reset = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            reset = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        new_cache["extra"] = {
+            "pct": min(extra_obj["utilization"], 100),
+            "resetAt": reset.isoformat(),
+        }
 
     with _cache_lock:
         _cache = new_cache

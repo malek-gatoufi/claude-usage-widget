@@ -21,6 +21,7 @@ struct CacheEntry: Codable, Sendable {
     var weekly:   CacheMetric
     var sonnet:   CacheMetric?
     var sonnet45: CacheMetric?
+    var extra:    CacheMetric?   // pay-as-you-go extra usage (only when enabled)
 }
 
 // MARK: - DataFetcher
@@ -272,13 +273,26 @@ actor DataFetcher {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw URLError(.cannotParseResponse) }
 
-        // Response: { five_hour: {utilization: 0-100, resets_at: "ISO"}, seven_day: {...}, seven_day_sonnet: {...} }
         func metric(_ key: String) -> CacheMetric? {
             guard let obj = json[key] as? [String: Any],
                   let util = obj["utilization"] as? Double
             else { return nil }
-            let resetAt = obj["resets_at"] as? String
-            return CacheMetric(pct: round(util), resetAt: resetAt)
+            return CacheMetric(pct: round(util), resetAt: obj["resets_at"] as? String)
+        }
+
+        // extra_usage resets on the 1st of each month (not included in resets_at)
+        func extraMetric() -> CacheMetric? {
+            guard let obj = json["extra_usage"] as? [String: Any],
+                  let enabled = obj["is_enabled"] as? Bool, enabled,
+                  let util = obj["utilization"] as? Double
+            else { return nil }
+            var comps = Calendar.current.dateComponents([.year, .month], from: Date())
+            comps.month = (comps.month ?? 1) + 1
+            if (comps.month ?? 1) > 12 { comps.month = 1; comps.year = (comps.year ?? 2026) + 1 }
+            comps.day = 1
+            let resetDate = Calendar.current.date(from: comps) ?? Date().addingTimeInterval(30 * 86400)
+            let resetAt = ISO8601DateFormatter().string(from: resetDate)
+            return CacheMetric(pct: min(util, 100), resetAt: resetAt)
         }
 
         guard let session = metric("five_hour"),
@@ -288,7 +302,8 @@ actor DataFetcher {
         return CacheEntry(
             session:  session,
             weekly:   weekly,
-            sonnet45: metric("seven_day_sonnet")
+            sonnet45: metric("seven_day_sonnet"),
+            extra:    extraMetric()
         )
     }
 
