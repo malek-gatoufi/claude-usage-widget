@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 PORT = 27182
-REFRESH_INTERVAL = 300  # 5 minutes
+REFRESH_INTERVAL = 60  # 1 minute
 
 HOME = Path.home()
 GROUP_CONTAINER = HOME / "Library/Group Containers/group.lekmax.ClaudeUsage"

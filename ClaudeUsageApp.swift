@@ -43,7 +43,7 @@ final class UsageModel: ObservableObject {
 
     init() {
         Task { @MainActor [weak self] in self?.refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refresh() }
         }
     }
