@@ -34,6 +34,7 @@ _cache_lock = threading.Lock()
 
 def load_token_json() -> Optional[dict]:
     """Read OAuth JSON from the first available source."""
+    # 1. Group Container cache (written by main app or previous refresh)
     for path in [
         GROUP_CONTAINER / "token-cache.json",
         HOME / ".claude/.credentials.json",
@@ -42,6 +43,19 @@ def load_token_json() -> Optional[dict]:
             return json.loads(path.read_text())
         except Exception:
             pass
+
+    # 2. macOS Keychain — used by newer Claude Code versions
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout.strip())
+    except Exception:
+        pass
+
     return None
 
 
