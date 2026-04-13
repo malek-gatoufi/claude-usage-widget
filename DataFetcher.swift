@@ -69,24 +69,40 @@ actor DataFetcher {
     private static let oauthScopes   = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
     /// Priority: App Group token cache → ~/.claude/.credentials.json → Keychain
-    /// The App Group cache is written on every successful read, so after the first
-    /// run neither claude logout nor Keychain prompts interrupt the app.
+    /// If the cached token is expired we skip ahead to fresher sources before
+    /// falling back to the stale JSON (whose refresh token may still be valid).
     nonisolated private func loadOAuthJSON() -> [String: Any]? {
-        // 1. App Group token cache (our own copy, always accessible, no prompts)
+        var staleJSON: [String: Any]? = nil
+
+        // Helper: is this JSON's access token still valid?
+        func isFresh(_ json: [String: Any]) -> Bool {
+            guard let oauth = json["claudeAiOauth"] as? [String: Any],
+                  let exp = oauth["expiresAt"] as? Double
+            else { return false }
+            return exp >= Date().timeIntervalSince1970 * 1000
+        }
+
+        // 1. App Group token cache
         if let data = try? Data(contentsOf: tokenCacheURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return json
+            if isFresh(json) { return json }
+            staleJSON = json   // expired — keep as last-resort fallback
         }
+
         // 2. Claude CLI credentials file (written by `claude login`, no prompt)
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
             let path = URL(fileURLWithPath: String(cString: dir))
                 .appendingPathComponent(".claude/.credentials.json")
             if let data = try? Data(contentsOf: path),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                persistTokenCache(json)   // seed App Group cache for next time
-                return json
+                if isFresh(json) {
+                    persistTokenCache(json)   // seed App Group cache for next time
+                    return json
+                }
+                if staleJSON == nil { staleJSON = json }
             }
         }
+
         // 3. Keychain — may prompt once on ad-hoc builds, then persists
         let q: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
@@ -95,12 +111,15 @@ actor DataFetcher {
             kSecMatchLimit:  kSecMatchLimitOne,
         ]
         var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        persistTokenCache(json)           // seed App Group cache for next time
-        return json
+        if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+           let data = out as? Data,
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            persistTokenCache(json)           // update App Group cache with fresh token
+            return json
+        }
+
+        // All fresh sources exhausted — return stale token so refresh can be attempted
+        return staleJSON
     }
 
     /// Writes OAuth JSON into the App Group container so future reads never need
