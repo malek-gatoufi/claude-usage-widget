@@ -241,9 +241,29 @@ actor DataFetcher {
         }
     }
 
+    // ─── Local proxy (widget-server.py at 127.0.0.1:27182) ──────────
+
+    private func fetchFromLocalProxy() async -> CacheEntry? {
+        guard let url = URL(string: "http://127.0.0.1:27182/") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 2
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let entry = try? JSONDecoder().decode(CacheEntry.self, from: data)
+        else { return nil }
+        return entry
+    }
+
     // ─── Fetch principal ──────────────────────────────────────────────
 
     func fetch() async -> CacheEntry? {
+        // 0. Local proxy — widget-server.py handles OAuth, refresh, rate-limits.
+        //    Both the menu bar and the widget extension read from the same source.
+        if let entry = await fetchFromLocalProxy() {
+            writeCache(entry)
+            return entry
+        }
+
         // 1. OAuth path (Claude Pro/Max/Team — same source as /usage command)
         //    If an OAuth token exists, never fall back to API key — the API key
         //    returns its own rate-limit headers which are unrelated to subscription usage.
