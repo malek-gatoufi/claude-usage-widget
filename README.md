@@ -57,10 +57,9 @@ If you have Claude Code installed and are logged in, the app uses OAuth automati
 See [INSTALL.md](INSTALL.md) for the full step-by-step guide.
 
 ```bash
-git clone <repo-url>
-cd claudeusage/ClaudeUsage
-open ClaudeUsage.xcodeproj
-# Set your Team in Signing & Capabilities, then Cmd+R
+git clone git@github.com:malek-gatoufi/claude-usage-widget.git
+cd claude-usage-widget/claudeusage/ClaudeUsage
+bash install.sh
 ```
 
 ---
