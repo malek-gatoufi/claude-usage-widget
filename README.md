@@ -6,6 +6,22 @@ A native macOS menu bar app + desktop widget that shows your Anthropic Claude us
 
 ---
 
+## Screenshots
+
+### Menu bar
+
+<img src="screenshots/menu-bar-pourcentage.png" width="120"> <img src="screenshots/menu-bar-dropdown.png" width="220">
+
+### Desktop widget — Dark mode
+
+<img src="screenshots/widget-dark-mode-front.png" width="600">
+
+### Desktop widget — Light mode
+
+<img src="screenshots/widget-light-mode-front.png" width="600">
+
+---
+
 ## What it shows
 
 | Metric | What it measures |
@@ -13,10 +29,11 @@ A native macOS menu bar app + desktop widget that shows your Anthropic Claude us
 | **Session** | Rolling 5-hour usage window |
 | **Weekly** | Rolling 7-day usage window |
 | **Sonnet 4.5** | Sonnet-specific 7-day window (when applicable) |
+| **Extra usage** | Pay-as-you-go credits (when enabled), resets monthly |
 
 - Menu bar icon displays current session % at a glance
 - Desktop widget in Small / Medium / Large with Liquid Glass background
-- Refreshes every **5 minutes** automatically
+- Refreshes every **60 seconds** automatically
 
 ---
 
