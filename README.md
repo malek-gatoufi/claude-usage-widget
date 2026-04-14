@@ -10,7 +10,7 @@ A native macOS menu bar app + desktop widget that shows your Anthropic Claude us
 
 ### Menu bar
 
-<img src="screenshots/menu-bar-pourcentage.png" width="120"> <img src="screenshots/menu-bar-dropdown.png" width="220">
+<img src="screenshots/menu-bar-pourcentage.png" width="220"> <img src="screenshots/menu-bar-dropdown.png" width="220">
 
 ### Desktop widget — Dark mode
 
