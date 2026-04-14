@@ -210,7 +210,18 @@ def refresh_cache() -> None:
     with _cache_lock:
         _cache = new_cache
     with _next_refresh_lock:
-        _next_refresh_at = time.time() + REFRESH_INTERVAL
+        _next_refresh_at = time.time() + read_config_interval()
+
+    # Persist fresh data so the widget can read it directly (no HTTP call needed)
+    for cache_path in [
+        GROUP_CONTAINER / "usage-cache.json",
+        HOME / ".claude-widget" / "usage-cache.json",
+    ]:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(new_cache))
+        except Exception:
+            pass
 
 
 def read_config_interval() -> int:
@@ -262,8 +273,28 @@ class Handler(BaseHTTPRequestHandler):
         pass  # silence per-request logs
 
 
+def _load_cache_if_fresh(data: dict) -> bool:
+    """Load cache only if the session hasn't reset yet. Returns True if loaded."""
+    if not data.get("session") or not data.get("weekly"):
+        return False
+    reset_str = (data.get("session") or {}).get("resetAt")
+    if reset_str:
+        try:
+            from datetime import datetime as _dt
+            reset_time = _dt.fromisoformat(reset_str)
+            if _dt.now(timezone.utc) > reset_time:
+                print("startup cache is stale (session already reset), ignoring",
+                      file=sys.stderr, flush=True)
+                return False
+        except Exception:
+            pass
+    with _cache_lock:
+        _cache = data
+    return True
+
+
 if __name__ == "__main__":
-    # Pre-load cached data so the server can serve immediately even if rate-limited
+    # Pre-load fresh cached data only — stale data (past resetAt) is discarded
     for cache_path in [
         GROUP_CONTAINER / "usage-cache.json",
         HOME / ".claude-widget" / "usage-cache.json",
@@ -271,9 +302,7 @@ if __name__ == "__main__":
         if cache_path.exists():
             try:
                 data = json.loads(cache_path.read_text())
-                if data.get("session") and data.get("weekly"):
-                    with _cache_lock:
-                        _cache = data
+                if _load_cache_if_fresh(data):
                     break
             except Exception:
                 pass
