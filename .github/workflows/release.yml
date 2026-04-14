@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build (Release, ad-hoc signed)
+        run: |
+          xcodebuild -scheme ClaudeUsage -configuration Release \
+            -derivedDataPath /tmp/ClaudeUsageBuild \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            -quiet
+
+      - name: Ad-hoc sign
+        run: |
+          APP=/tmp/ClaudeUsageBuild/Build/Products/Release/ClaudeUsage.app
+          WIDGET="$APP/Contents/PlugIns/ClaudeUsageWidgetExtension.appex"
+          codesign --force --deep --sign - \
+            --entitlements ClaudeUsageWidget/ClaudeUsageWidget.entitlements "$WIDGET"
+          codesign --force --sign - \
+            --entitlements ClaudeUsage.entitlements "$APP"
+
+      - name: Create zip
+        run: |
+          APP=/tmp/ClaudeUsageBuild/Build/Products/Release/ClaudeUsage.app
+          cd /tmp/ClaudeUsageBuild/Build/Products/Release
+          zip -r ClaudeUsage.zip ClaudeUsage.app
+          echo "SHA256=$(shasum -a 256 ClaudeUsage.zip | awk '{print $1}')" >> $GITHUB_ENV
+          echo "ZIP_PATH=/tmp/ClaudeUsageBuild/Build/Products/Release/ClaudeUsage.zip" >> $GITHUB_ENV
+
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_PATH }}
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ### Option 1 — Homebrew (recommended)
+            ```bash
+            brew install --cask malek-gatoufi/tap/claude-usage-widget
+            ```
+
+            ### Option 2 — Manual
+            ```bash
+            git clone git@github.com:malek-gatoufi/claude-usage-widget.git
+            cd claude-usage-widget/claudeusage/ClaudeUsage
+            bash install.sh
+            ```
+
+            ### Requirements
+            - macOS 26+ (Tahoe)
+            - Claude Code installed and logged in (`claude login`)
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        if: env.TAP_TOKEN != ''
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/malek-gatoufi/homebrew-tap.git /tmp/homebrew-tap
+          mkdir -p /tmp/homebrew-tap/Casks
+          cat > /tmp/homebrew-tap/Casks/claude-usage-widget.rb << EOF
+          cask "claude-usage-widget" do
+            version "${VERSION#v}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/malek-gatoufi/claude-usage-widget/releases/download/${VERSION}/ClaudeUsage.zip"
+            name "Claude Usage Widget"
+            desc "macOS menu bar + desktop widget for Claude usage monitoring"
+            homepage "https://github.com/malek-gatoufi/claude-usage-widget"
+
+            app "ClaudeUsage.app"
+
+            postflight do
+              system_command "/usr/bin/xattr",
+                args: ["-cr", "#{appdir}/ClaudeUsage.app"]
+            end
+
+            zap trash: [
+              "~/Library/Application Support/ClaudeUsage",
+              "~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist",
+              "~/.claude-widget",
+            ]
+          end
+          EOF
+          cd /tmp/homebrew-tap
+          git add Casks/claude-usage-widget.rb
+          git commit -m "chore: update claude-usage-widget to ${VERSION}"
+          git push

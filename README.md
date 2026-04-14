@@ -2,7 +2,7 @@
 
 A native macOS menu bar app + desktop widget that shows your Anthropic Claude usage in real time — session %, weekly %, and Sonnet 4.5 weekly %.
 
-![macOS 26+](https://img.shields.io/badge/macOS-26%2B-orange) ![Swift](https://img.shields.io/badge/Swift-6-orange) ![WidgetKit](https://img.shields.io/badge/WidgetKit-macOS-orange) ![No API key required](https://img.shields.io/badge/auth-Claude%20CLI%20OAuth-green)
+![macOS 26+](https://img.shields.io/badge/macOS-26%2B-orange) ![Swift](https://img.shields.io/badge/Swift-6-orange) ![WidgetKit](https://img.shields.io/badge/WidgetKit-macOS-orange) ![No API key required](https://img.shields.io/badge/auth-Claude%20CLI%20OAuth-green) ![Release](https://img.shields.io/github/v/release/malek-gatoufi/claude-usage-widget)
 
 ---
 
@@ -35,9 +35,12 @@ A native macOS menu bar app + desktop widget that shows your Anthropic Claude us
 | **Sonnet 4.5** | Sonnet-specific 7-day window (when applicable) |
 | **Extra usage** | Pay-as-you-go credits (when enabled), resets monthly |
 
-- Menu bar icon displays current session % at a glance
-- Desktop widget in Small / Medium / Large with Liquid Glass background
-- Refreshes every **60 seconds** automatically
+- Menu bar icon displays current session % at a glance — **color-coded** (green / orange / red)
+- Desktop widget in Small / Medium / Large with Liquid Glass background, **tap to open app**
+- **Threshold notifications** when usage crosses 80% or 90% (configurable)
+- **Usage history** — 7-day line chart accessible from the menu bar
+- **Configurable refresh interval** (1 / 2 / 5 / 10 min) in Settings
+- Refreshes every **5 minutes** by default
 
 ---
 

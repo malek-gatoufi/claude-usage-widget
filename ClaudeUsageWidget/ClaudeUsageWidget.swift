@@ -500,6 +500,7 @@ struct ClaudeUsageEntryView: View {
                 .padding(20)
             }
         }
+        .widgetURL(URL(string: "claudeusage://open"))
         .containerBackground(for: .widget) {
             ZStack {
                 // Base verre liquide macOS 26
