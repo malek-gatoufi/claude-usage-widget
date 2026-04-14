@@ -2,8 +2,8 @@
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later
-- Xcode (any recent version — free from the Mac App Store)
+- macOS 26 (Tahoe) or later
+- Xcode command line tools (`xcode-select --install`)
 - Claude Code CLI installed and logged in (`claude login`)
 
 No paid Apple Developer account needed.
@@ -12,37 +12,78 @@ No paid Apple Developer account needed.
 
 ## Quick install (one command)
 
-From the repo root:
-
 ```bash
-cd claudeusage/ClaudeUsage
+git clone git@github.com:malek-gatoufi/claude-usage-widget.git
+cd claude-usage-widget/claudeusage/ClaudeUsage
 bash install.sh
 ```
 
-That's it. The script builds, signs (ad-hoc), installs to `/Applications`, registers the widget, and launches the app.
+The script:
+1. Builds the app with `xcodebuild`
+2. Installs to `/Applications/ClaudeUsage.app`
+3. Signs ad-hoc (no developer account needed)
+4. Installs `widget-server.py` as a LaunchAgent (auto-starts at login)
+5. Launches the app
 
 ---
 
-## What happens after launch
+## What happens after install
 
-1. **Menu bar icon** — shows your current session % (e.g. `42%`). If you're not logged into Claude Code, it shows `⚙`.
+1. **Menu bar icon** — shows your current session % color-coded:
+   - 🟢 Green: < 50%
+   - 🟠 Orange: 50–80%
+   - 🔴 Red: ≥ 80%
+
+   If you're not logged in, it shows `⚙`.
 
 2. **Desktop widget** — right-click your desktop → **Edit Widgets** → search **Claude Usage** → pick Small / Medium / Large.
 
-3. **If the widget shows DEMO**, kill the extension and let WidgetKit reload it:
-   ```bash
-   killall ClaudeUsageWidgetExtension
-   ```
+3. **Clicking the widget** opens the menu bar app directly.
 
 ---
 
 ## Keychain permission
 
-On first launch macOS will prompt:
+On first launch macOS may prompt:
 
 > *"ClaudeUsage wants to use the 'Claude Code-credentials' keychain item."*
 
-Click **Always Allow**. This lets the app read the OAuth token stored by Claude Code CLI without you needing to enter an API key.
+Click **Always Allow**. This lets the app read the OAuth token stored by Claude Code CLI.
+
+---
+
+## Troubleshooting
+
+**Widget shows DEMO data**
+
+Kill the widget extension — WidgetKit will reload it with live data:
+```bash
+killall ClaudeUsageWidgetExtension
+```
+
+**Menu bar shows `⚙` (gear icon)**
+
+No auth found. Either:
+- Run `claude login` to authenticate via Claude Code CLI
+- Or open Settings → enter an Anthropic API key as fallback
+
+**Data is stale / not updating**
+
+Check the server is running:
+```bash
+curl http://127.0.0.1:27182/
+```
+
+If it returns `Connection refused`, restart the server:
+```bash
+launchctl unload ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist
+launchctl load -w ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist
+```
+
+Check server logs:
+```bash
+tail -20 /tmp/ClaudeUsageWidget.log
+```
 
 ---
 
@@ -53,15 +94,18 @@ open ClaudeUsage.xcodeproj
 ```
 
 1. Select the **ClaudeUsage** project → **Signing & Capabilities**
-2. Set your Apple Developer Team for both targets (`ClaudeUsage` and `ClaudeUsageWidgetExtension`)
+2. Set your Apple Developer Team for both targets
 3. Press **Cmd+R**
 
-A free Apple ID is sufficient — no paid membership required.
+A free Apple ID is sufficient.
 
 ---
 
 ## Uninstall
 
 ```bash
-killall ClaudeUsage 2>/dev/null; rm -rf /Applications/ClaudeUsage.app
+launchctl unload ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist
+rm ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist
+rm -rf /Applications/ClaudeUsage.app
+rm -rf ~/.claude-widget
 ```
