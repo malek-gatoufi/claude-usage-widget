@@ -14,11 +14,15 @@ A native macOS menu bar app + desktop widget that shows your Anthropic Claude us
 
 ### Desktop widget — Dark mode
 
-<img src="screenshots/widget-dark-mode-front.png" width="600">
+| Focused | Background (another window active) |
+|---------|-----------------------------------|
+| <img src="screenshots/widget-dark-mode-front.png" width="380"> | <img src="screenshots/widget-dark-mode-back.png" width="380"> |
 
 ### Desktop widget — Light mode
 
-<img src="screenshots/widget-light-mode-front.png" width="600">
+| Focused | Background (another window active) |
+|---------|-----------------------------------|
+| <img src="screenshots/widget-light-mode-front.png" width="380"> | <img src="screenshots/widget-light-mode-back.png" width="380"> |
 
 ---
 
