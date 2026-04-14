@@ -4,15 +4,19 @@ import ServiceManagement
 struct SettingsView: View {
     let onSave: () -> Void
 
-    @State private var apiKeyInput:   String = ""
-    @State private var hasOAuth:      Bool   = false
-    @State private var hasKey:        Bool   = false
-    @State private var statusMsg:     String = ""
-    @State private var isGreen:       Bool   = false
-    @State private var isTesting:     Bool   = false
-    @State private var launchAtLogin: Bool   = false
+    @State private var apiKeyInput:      String = ""
+    @State private var hasOAuth:         Bool   = false
+    @State private var hasKey:           Bool   = false
+    @State private var statusMsg:        String = ""
+    @State private var isGreen:          Bool   = false
+    @State private var isTesting:        Bool   = false
+    @State private var launchAtLogin:    Bool   = false
+    @State private var refreshInterval:  Int    = UserDefaults.standard.integer(forKey: "refreshInterval").nonZero ?? 300
+    @ObservedObject private var notifMgr = NotificationManager.shared
 
     private let orange = Color(red: 0.81, green: 0.48, blue: 0.34)
+    private let intervals = [60: "1 min", 120: "2 min", 300: "5 min", 600: "10 min"]
+    private let intervalKeys = [60, 120, 300, 600]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,7 +30,7 @@ struct SettingsView: View {
                 }
                 Spacer()
             }
-            .padding(.bottom, 20)
+            .padding(.bottom, 16)
 
             // ── Auth status ──────────────────────────────────────────────
             GroupBox {
@@ -35,19 +39,17 @@ struct SettingsView: View {
                         .font(.subheadline.bold())
 
                     if hasOAuth {
-                        // OAuth (Claude Pro/Max/Team) — no config needed
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Connecté via Claude Pro (OAuth)")
                                     .foregroundStyle(.primary)
-                                Text("Les données viennent de ~/.claude/.credentials.json")
+                                Text("Token lu depuis le Keychain Claude Code")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                         }
                     } else if hasKey {
-                        // API key fallback
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
                             Text("Clé API sauvegardée").foregroundStyle(.secondary)
@@ -58,14 +60,11 @@ struct SettingsView: View {
                             .buttonStyle(.borderless).foregroundStyle(orange)
                         }
                     } else {
-                        // No auth found
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Aucun token OAuth Claude trouvé.\nEntrez une clé API Anthropic en fallback :")
                                 .font(.caption).foregroundStyle(.secondary)
-
                             SecureField("sk-ant-api03-…", text: $apiKeyInput)
                                 .textFieldStyle(.roundedBorder)
-
                             HStack(alignment: .center, spacing: 10) {
                                 Button(isTesting ? "Test en cours…" : "Sauvegarder & Tester") {
                                     Task { await saveAndTest() }
@@ -73,14 +72,12 @@ struct SettingsView: View {
                                 .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty || isTesting)
                                 .buttonStyle(.borderedProminent)
                                 .tint(orange)
-
                                 if !statusMsg.isEmpty {
                                     Text(statusMsg)
                                         .font(.caption)
                                         .foregroundStyle(isGreen ? .green : .red)
                                 }
                             }
-
                             Link("Obtenir une clé → console.anthropic.com",
                                  destination: URL(string: "https://console.anthropic.com/settings/keys")!)
                                 .font(.caption).foregroundStyle(.secondary)
@@ -90,7 +87,54 @@ struct SettingsView: View {
                 .padding(6)
             }
 
-            Spacer().frame(height: 12)
+            Spacer().frame(height: 10)
+
+            // ── Refresh interval ─────────────────────────────────────────
+            GroupBox {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Intervalle de rafraîchissement").font(.subheadline.bold())
+                        Text("Fréquence de mise à jour des données")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker("", selection: $refreshInterval) {
+                        ForEach(intervalKeys, id: \.self) { key in
+                            Text(intervals[key] ?? "\(key)s").tag(key)
+                        }
+                    }
+                    .frame(width: 90)
+                    .onChange(of: refreshInterval) { _, val in
+                        UserDefaults.standard.set(val, forKey: "refreshInterval")
+                        writeServerConfig(interval: val)
+                        onSave()
+                    }
+                }
+                .padding(6)
+            }
+
+            Spacer().frame(height: 10)
+
+            // ── Notifications ────────────────────────────────────────────
+            GroupBox {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notifications de seuil").font(.subheadline.bold())
+                        Text("Alerte quand un indicateur dépasse le seuil")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker("", selection: $notifMgr.threshold) {
+                        ForEach(NotifThreshold.allCases) { t in
+                            Text(t.label).tag(t)
+                        }
+                    }
+                    .frame(width: 110)
+                }
+                .padding(6)
+            }
+
+            Spacer().frame(height: 10)
 
             // ── Launch at Login ───────────────────────────────────────────
             GroupBox {
@@ -117,7 +161,7 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 420, height: 340)
+        .frame(width: 420, height: 380)
         .onAppear { loadState() }
     }
 
@@ -169,4 +213,20 @@ struct SettingsView: View {
             isGreen = false
         }
     }
+
+    /// Write refresh interval to ~/.claude-widget/config.json so the server picks it up.
+    private func writeServerConfig(interval: Int) {
+        guard let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir else { return }
+        let base = URL(fileURLWithPath: String(cString: dir))
+            .appendingPathComponent(".claude-widget")
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let config: [String: Any] = ["refreshInterval": interval]
+        if let data = try? JSONSerialization.data(withJSONObject: config) {
+            try? data.write(to: base.appendingPathComponent("config.json"), options: .atomic)
+        }
+    }
+}
+
+private extension Int {
+    var nonZero: Int? { self == 0 ? nil : self }
 }

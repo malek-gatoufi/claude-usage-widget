@@ -138,9 +138,9 @@ private func makeEntry(_ raw: RawCache) -> UsageEntry? {
 // MARK: - Live fetch
 
 private func fetchLiveEntry() async -> UsageEntry? {
-    // 1. Try local proxy server (started by the LaunchAgent, no auth required).
-    //    2-second timeout keeps the widget snappy if the server isn't running.
-    if let entry = await fetchFromLocalProxy() { return entry }
+    // 1. Shared cache written by the menu bar app every 5 min — no API call needed
+    //    as long as the file is fresh.
+    if let (entry, age) = readSharedCache(), age < 360 { return entry }
 
     // 2. Direct Anthropic API — needs the OAuth token from our sandbox container.
     guard let token = readOAuthToken() else { return readCachedEntry() }
@@ -203,22 +203,18 @@ private func fetchLiveEntry() async -> UsageEntry? {
                       isDemo: false)
 }
 
-/// Reads from the LaunchAgent HTTP proxy on localhost (no auth, no sandbox issues).
-private func fetchFromLocalProxy() async -> UsageEntry? {
-    var req = URLRequest(url: URL(string: "http://127.0.0.1:27182/")!)
-    req.timeoutInterval = 2  // fast: if server is down, fall through quickly
-
-    guard let (data, resp) = try? await URLSession.shared.data(for: req),
-          let http = resp as? HTTPURLResponse, http.statusCode == 200,
-          let decoded = try? JSONDecoder().decode(RawCache.self, from: data)
+/// Reads the cache written by the menu bar app at ~/.claude-widget/usage-cache.json.
+/// Returns (entry, ageInSeconds) so the caller can decide if the data is fresh enough.
+private func readSharedCache() -> (UsageEntry, TimeInterval)? {
+    let url = realHome().appendingPathComponent(".claude-widget/usage-cache.json")
+    guard let data = try? Data(contentsOf: url),
+          let decoded = try? JSONDecoder().decode(RawCache.self, from: data),
+          let entry = makeEntry(decoded)
     else { return nil }
-
-    // Persist to sandbox container as cache for future offline loads
-    if let encoded = try? JSONEncoder().encode(decoded) {
-        try? encoded.write(to: sandboxHome.appendingPathComponent("usage-cache.json"), options: .atomic)
-    }
-
-    return makeEntry(decoded)
+    let age = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))
+        .flatMap { $0.contentModificationDate }
+        .map { -$0.timeIntervalSinceNow } ?? 999
+    return (entry, age)
 }
 
 // MARK: - Provider
@@ -500,6 +496,7 @@ struct ClaudeUsageEntryView: View {
                 .padding(20)
             }
         }
+        .widgetURL(URL(string: "claudeusage://open"))
         .containerBackground(for: .widget) {
             ZStack {
                 // Base verre liquide macOS 26

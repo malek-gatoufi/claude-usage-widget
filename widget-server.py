@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Optional
 
 PORT = 27182
-REFRESH_INTERVAL = 60  # 1 minute
+REFRESH_INTERVAL  = 300   # normal interval (5 minutes)
+BACKOFF_AFTER_429 = 1800  # wait 30 min after 429 when data is fresh
+BACKOFF_STALE_429 = 300   # wait 5 min when data is stale (after a session reset)
 
 HOME = Path.home()
 GROUP_CONTAINER = HOME / "Library/Group Containers/group.lekmax.ClaudeUsage"
@@ -29,6 +31,7 @@ OAUTH_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_s
 
 _cache: Optional[dict] = None
 _cache_lock = threading.Lock()
+_next_refresh_lock = threading.Lock()
 
 
 # ── OAuth helpers ─────────────────────────────────────────────────────────────
@@ -114,8 +117,24 @@ def maybe_refresh(token_data: dict) -> dict:
 
 # ── Usage fetch ───────────────────────────────────────────────────────────────
 
+def _cache_is_stale() -> bool:
+    """Return True if the cached session data is past its reset time."""
+    with _cache_lock:
+        if _cache is None:
+            return True
+        reset_str = (_cache.get("session") or {}).get("resetAt")
+    if not reset_str:
+        return True
+    try:
+        from datetime import datetime as _dt
+        reset_time = _dt.fromisoformat(reset_str)
+        return _dt.now(timezone.utc) > reset_time
+    except Exception:
+        return True
+
+
 def refresh_cache() -> None:
-    global _cache
+    global _cache, _next_refresh_at
 
     token_data = load_token_json()
     if not token_data:
@@ -141,7 +160,19 @@ def refresh_cache() -> None:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         if e.code == 429:
-            pass  # rate-limited, keep old cache
+            # Honour Retry-After header when present
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            base = BACKOFF_STALE_429 if _cache_is_stale() else BACKOFF_AFTER_429
+            if retry_after:
+                try:
+                    delay = max(60, int(retry_after) + 5)
+                except ValueError:
+                    delay = base
+            else:
+                delay = base
+            with _next_refresh_lock:
+                _next_refresh_at = time.time() + delay
+            print(f"rate-limited (429), next retry in {delay}s", file=sys.stderr, flush=True)
         return
     except Exception:
         return
@@ -178,15 +209,47 @@ def refresh_cache() -> None:
 
     with _cache_lock:
         _cache = new_cache
+    with _next_refresh_lock:
+        _next_refresh_at = time.time() + read_config_interval()
+
+    # Persist fresh data so the widget can read it directly (no HTTP call needed)
+    for cache_path in [
+        GROUP_CONTAINER / "usage-cache.json",
+        HOME / ".claude-widget" / "usage-cache.json",
+    ]:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(new_cache))
+        except Exception:
+            pass
+
+
+def read_config_interval() -> int:
+    """Read refreshInterval from ~/.claude-widget/config.json, fallback to REFRESH_INTERVAL."""
+    try:
+        cfg_path = HOME / ".claude-widget" / "config.json"
+        cfg = json.loads(cfg_path.read_text())
+        val = int(cfg.get("refreshInterval", REFRESH_INTERVAL))
+        return max(60, val)   # floor at 60s to avoid hammering
+    except Exception:
+        return REFRESH_INTERVAL
 
 
 def refresh_loop() -> None:
+    global _next_refresh_at
+    _next_refresh_at = 0  # refresh immediately on first iteration
     while True:
-        try:
-            refresh_cache()
-        except Exception as e:
-            print(f"refresh error: {e}", file=sys.stderr, flush=True)
-        time.sleep(REFRESH_INTERVAL)
+        now = time.time()
+        with _next_refresh_lock:
+            due = _next_refresh_at
+        if now >= due:
+            try:
+                refresh_cache()
+            except Exception as e:
+                print(f"refresh error: {e}", file=sys.stderr, flush=True)
+                with _next_refresh_lock:
+                    _next_refresh_at = time.time() + read_config_interval()
+        time.sleep(10)  # tight loop, actual interval controlled by _next_refresh_at
 
 
 # ── HTTP server ───────────────────────────────────────────────────────────────
@@ -210,8 +273,28 @@ class Handler(BaseHTTPRequestHandler):
         pass  # silence per-request logs
 
 
+def _load_cache_if_fresh(data: dict) -> bool:
+    """Load cache only if the session hasn't reset yet. Returns True if loaded."""
+    if not data.get("session") or not data.get("weekly"):
+        return False
+    reset_str = (data.get("session") or {}).get("resetAt")
+    if reset_str:
+        try:
+            from datetime import datetime as _dt
+            reset_time = _dt.fromisoformat(reset_str)
+            if _dt.now(timezone.utc) > reset_time:
+                print("startup cache is stale (session already reset), ignoring",
+                      file=sys.stderr, flush=True)
+                return False
+        except Exception:
+            pass
+    with _cache_lock:
+        _cache = data
+    return True
+
+
 if __name__ == "__main__":
-    # Pre-load cached data so the server can serve immediately even if rate-limited
+    # Pre-load fresh cached data only — stale data (past resetAt) is discarded
     for cache_path in [
         GROUP_CONTAINER / "usage-cache.json",
         HOME / ".claude-widget" / "usage-cache.json",
@@ -219,9 +302,7 @@ if __name__ == "__main__":
         if cache_path.exists():
             try:
                 data = json.loads(cache_path.read_text())
-                if data.get("session") and data.get("weekly"):
-                    with _cache_lock:
-                        _cache = data
+                if _load_cache_if_fresh(data):
                     break
             except Exception:
                 pass

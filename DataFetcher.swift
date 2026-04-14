@@ -242,6 +242,8 @@ actor DataFetcher {
     }
 
     // ─── Local proxy (widget-server.py at 127.0.0.1:27182) ──────────
+    // Single API caller: both menu bar and widget read from the same source,
+    // so we never make duplicate API calls that could trigger rate limiting.
 
     private func fetchFromLocalProxy() async -> CacheEntry? {
         guard let url = URL(string: "http://127.0.0.1:27182/") else { return nil }
@@ -257,8 +259,8 @@ actor DataFetcher {
     // ─── Fetch principal ──────────────────────────────────────────────
 
     func fetch() async -> CacheEntry? {
-        // 0. Local proxy — widget-server.py handles OAuth, refresh, rate-limits.
-        //    Both the menu bar and the widget extension read from the same source.
+        // 0. Proxy — server is the single API source, handles rate limits & token refresh.
+        //    Fall through only if server isn't running.
         if let entry = await fetchFromLocalProxy() {
             writeCache(entry)
             return entry
@@ -428,10 +430,12 @@ actor DataFetcher {
         // UserDefaults — readable by widget via App Group suite
         DataFetcher.groupDefaults?.set(data, forKey: "usage-cache")
         DataFetcher.groupDefaults?.synchronize()
-        // File backup
+        // Group Container file
         let dir = cacheURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? data.write(to: cacheURL, options: [])
+        // Note: ~/.claude-widget/usage-cache.json is written by widget-server.py (non-sandboxed).
+        // The sandboxed app cannot write outside its container with ad-hoc signing.
     }
 
     /// Also persist OAuth token to UserDefaults so widget can read it without file I/O.

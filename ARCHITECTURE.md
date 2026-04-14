@@ -2,143 +2,136 @@
 
 ## Overview
 
-The project has two executable targets that run independently:
-
 ```
-ClaudeUsage.app  (menu bar process)
-└── ClaudeUsageWidgetExtension.appex  (embedded WidgetKit extension)
+widget-server.py          LaunchAgent — seul appelant API, tourne en permanence
+      │  écrit ~/.claude-widget/usage-cache.json
+      │  expose HTTP 127.0.0.1:27182
+      │
+      ├──► ClaudeUsage.app (menu bar, sandboxé)
+      │         lit proxy HTTP :27182
+      │         NotificationManager, HistoryStore
+      │         WidgetCenter.reloadAllTimelines()
+      │
+      └──► ClaudeUsageWidgetExtension.appex (WidgetKit, sandboxé)
+               lit ~/.claude-widget/usage-cache.json via getpwuid bypass
+               fallback : appel OAuth direct si cache > 6 min
 ```
 
-Both are sandboxed macOS apps. They share no files — each calls the Anthropic API independently using the same OAuth token from the macOS Keychain.
+**Règle fondamentale : un seul appelant API.**
+`widget-server.py` est le seul process qui contacte `api.anthropic.com`.
+La menu bar et le widget lisent ses données — jamais l'API directement,
+sauf si le serveur est indisponible.
 
 ---
 
-## Authentication
+## Composants
 
-### Primary path — Claude CLI OAuth
+### 1. widget-server.py (LaunchAgent)
 
-Claude Code CLI stores its OAuth credentials in the macOS Keychain under:
+- Tourne en permanence via `~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist`
+- Rafraîchit toutes les **5 min** (lire intervalle dans `~/.claude-widget/config.json`)
+- Après chaque fetch réussi → écrit `~/.claude-widget/usage-cache.json`
+- Gestion 429 : backoff 30 min (données fraîches) ou 5 min (après reset de session)
+  - Lit l'en-tête `Retry-After` (minimum 60 s)
+- Démarrage : ne charge le cache que si `resetAt` est dans le futur
 
-```
-Service:  "Claude Code-credentials"
-Account:  <your macOS login name>
-Value:    JSON blob
-```
+### 2. ClaudeUsage.app (menu bar)
 
-The JSON structure:
-```json
-{
-  "claudeAiOauth": {
-    "accessToken":  "sk-ant-oat01-...",
-    "refreshToken": "sk-ant-ort01-...",
-    "expiresAt":    1775984095359,
-    "scopes":       ["user:inference", "user:sessions:claude_code", ...],
-    "subscriptionType": "max"
-  }
-}
-```
+`DataFetcher.fetch()` — priorité :
+1. Proxy HTTP `127.0.0.1:27182` (timeout 2 s)
+2. Appel OAuth direct (si proxy indisponible)
+3. Clé API fallback
+4. Cache local
 
-`DataFetcher` reads this item with `SecItemCopyMatching`, checks `expiresAt` (milliseconds since epoch), and calls the token refresh endpoint if needed:
+Autres composants :
+- `NotificationManager` : alertes macOS à 80 % / 90 % (configurable)
+- `HistoryStore` : snapshot horaire sur 7 jours (`~/.claude-widget/history.json`)
+- `HistoryView` : graphe ligne (Swift Charts) dans une fenêtre dédiée
+- `SettingsView` : intervalle, seuil notifications, clé API, launch at login
 
-```
-POST https://platform.claude.com/v1/oauth/token
-  grant_type:    refresh_token
-  refresh_token: <current refresh token>
-  client_id:     9d1c250a-e61b-44d9-88ed-5944d1962f5e
-  scope:         user:profile user:inference ...
-```
+### 3. ClaudeUsageWidgetExtension.appex (WidgetKit)
 
-The refreshed token is written back to the same Keychain item so both targets see the update.
-
-### Fallback — Anthropic API key
-
-If no Claude CLI token is found, `DataFetcher` falls back to an API key stored in a separate Keychain item (`com.claudeusage.apikey`). In this mode it sends a minimal `POST /v1/messages` request (1-token Haiku call) and reads the usage percentages from the `anthropic-ratelimit-unified-*` response headers.
+`fetchLiveEntry()` — priorité :
+1. `~/.claude-widget/usage-cache.json` via `getpwuid` (si âge < 6 min)
+2. Appel OAuth direct (si cache stale)
+3. Cache sandbox container
+4. Données DEMO
 
 ---
 
-## Data flow
+## Authentification
 
-### Menu bar app
-
-```
-Timer (every 5 min)
-  └── DataFetcher.fetch()
-        ├── validOAuthToken()  →  read/refresh Keychain "Claude Code-credentials"
-        ├── GET https://api.anthropic.com/api/oauth/usage
-        │     Authorization: Bearer <token>
-        │     anthropic-beta: oauth-2025-04-20
-        │
-        │   Response: {
-        │     "five_hour":      { "utilization": 0-100, "resets_at": "ISO8601" },
-        │     "seven_day":      { "utilization": 0-100, "resets_at": "ISO8601" },
-        │     "seven_day_sonnet": { ... }   ← present for Max/Team plans
-        │   }
-        │
-        └── CacheEntry  →  UsageModel @Published  →  MenuBarContent (SwiftUI)
-```
-
-### Widget extension
+### OAuth (défaut — Claude Code CLI)
 
 ```
-WidgetKit timeline request (every 5 min)
-  └── fetchLiveEntry()
-        ├── readOAuthToken()  →  same Keychain item "Claude Code-credentials"
-        └── GET https://api.anthropic.com/api/oauth/usage  (same request as above)
-              └── UsageEntry  →  ClaudeUsageEntryView (SwiftUI)
+Keychain service : "Claude Code-credentials"
+Value            : { claudeAiOauth: { accessToken, refreshToken, expiresAt } }
 ```
 
-The widget calls the API directly rather than reading a shared file. This sidesteps macOS sandbox restrictions that prevent two sandboxed apps from sharing files in the user's home directory without App Groups.
+`DataFetcher.loadOAuthJSON()` — priorité des sources :
+1. Group Container `token-cache.json` **(si token non expiré)**
+2. `~/.claude/.credentials.json` **(si token non expiré)**
+3. Keychain macOS **(toujours essayé en dernier — contient le token le plus frais)**
+
+Si expiré → `refreshOAuthToken()` via `POST https://platform.claude.com/v1/oauth/token`.
+Token rafraîchi persisté dans Group Container + `~/.claude/.credentials.json`.
+
+### Clé API (fallback)
+
+Stockée dans le Keychain sous `com.claudeusage.apikey`.
+Utilisée uniquement si aucun token OAuth n'est trouvé.
+Mode : `POST /v1/messages` avec 1 token Haiku, lit les headers `anthropic-ratelimit-unified-*`.
 
 ---
 
-## Sandbox entitlements
+## Contournement du sandbox (ad-hoc signing)
 
-| Entitlement | Main app | Widget ext |
-|---|---|---|
-| `app-sandbox` | ✓ | ✓ |
-| `network.client` | ✓ | ✓ |
-| `home-relative-path.read-only (.claude/)` | ✓ | — |
-| `home-relative-path.read-write (.claude-widget/)` | ✓ | — |
+Avec signing ad-hoc (`-`), les entitlements `App Group` et `temporary-exception` ne sont pas honorés.
 
-The `.claude/` read entitlement on the main app is a historical artifact — it was originally used to read `~/.claude/.credentials.json`. The live token is now read from the Keychain directly.
+**Solution** : `getpwuid(getuid())` retourne le vrai répertoire home (non redirigé).
+- Permet au widget de lire `~/.claude-widget/usage-cache.json`
+- Permet aux deux apps de lire `~/Library/Group Containers/.../token-cache.json`
+- Le serveur Python (non-sandboxé) écrit librement dans ces chemins
 
 ---
 
-## Key files
+## Structure des fichiers
 
-### `DataFetcher.swift`
-
-A Swift `actor` (thread-safe by construction). Public surface:
-
-| Method | Type | Description |
-|--------|------|-------------|
-| `hasAuth` | `nonisolated var` | Sync check: keychain has an OAuth token or API key |
-| `fetch()` | `async -> CacheEntry?` | Full fetch: OAuth → API key → cached file |
-| `loadOAuthToken()` | `nonisolated func` | Sync read of the Claude CLI keychain item |
-| `loadAPIKey()` | `nonisolated func` | Sync read of the fallback API key from keychain |
-| `saveAPIKey(_:)` | `nonisolated func throws` | Save a new API key to keychain |
-
-### `ClaudeUsageApp.swift`
-
-- `@main` entry point, `MenuBarExtra` scene (SwiftUI)
-- `UsageModel`: `@MainActor ObservableObject` that owns the refresh timer and publishes `CacheEntry?`
-- Calls `WidgetCenter.shared.reloadAllTimelines()` after every fetch so the widget stays in sync
-
-### `ClaudeUsageWidget.swift`
-
-- `TimelineProvider` with `getTimeline` calling `fetchLiveEntry()` inside a `Task`
-- Three widget families: `systemSmall` (ring), `systemMedium` (three rings), `systemLarge` (bars)
-- Falls back to a demo entry if the API call fails (no auth or network error)
+```
+ClaudeUsage/
+├── ClaudeUsageApp.swift        # @main, menu bar, UsageModel, couleur dynamique
+├── DataFetcher.swift           # OAuth, refresh token, proxy, cache
+├── NotificationManager.swift   # Alertes seuil (80 % / 90 %)
+├── HistoryStore.swift          # Snapshots horaires 7 jours
+├── HistoryView.swift           # Graphe Swift Charts
+├── SettingsView.swift          # Réglages (intervalle, notifications, auth)
+├── widget-server.py            # Serveur HTTP local (LaunchAgent)
+├── install.sh                  # Installation one-command
+├── ClaudeUsage.entitlements
+└── ClaudeUsageWidget/
+    ├── ClaudeUsageWidget.swift          # Widget UI + fetch
+    ├── ClaudeUsageWidget.entitlements
+    └── ClaudeUsageWidgetBundle.swift
+```
 
 ---
 
-## Why the widget calls the API directly
+## Flux de données
 
-The standard WidgetKit data-sharing pattern uses **App Groups** — a shared container both the main app and extension can read/write. App Groups require:
-- A registered App Group ID in the Apple Developer portal
-- Matching `com.apple.security.application-groups` entitlement on both targets
-- A paid Apple Developer Program membership for proper provisioning
-
-To remain buildable with a free Apple ID, this app avoids App Groups. The `temporary-exception.files.home-relative-path` entitlements that were originally used for a shared `~/.claude-widget/usage-cache.json` proved unreliable at runtime in the macOS sandbox. Having the widget call the API directly is simpler, always up-to-date, and requires no coordination between processes.
-
-The only downside is two API calls per refresh cycle instead of one. The `/api/oauth/usage` endpoint is a lightweight read with no cost impact.
+```
+[claude login]
+      ↓
+Keychain "Claude Code-credentials"
+      ↓
+widget-server.py (toutes les 5 min)
+      ↓ GET /api/oauth/usage (Bearer token)
+api.anthropic.com
+      ↓ { five_hour, seven_day, seven_day_sonnet, extra_usage }
+~/.claude-widget/usage-cache.json   ──► Widget (lecture directe)
+      ↓
+HTTP 127.0.0.1:27182                ──► Menu bar app
+      ↓
+WidgetCenter.reloadAllTimelines()
+      ↓
+Desktop widget mis à jour
+```
