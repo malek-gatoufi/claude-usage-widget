@@ -57,13 +57,21 @@ If you have Claude Code installed and are logged in, the app uses OAuth automati
 
 ## Quick install
 
-See [INSTALL.md](INSTALL.md) for the full step-by-step guide.
+### Option 1 — Homebrew (recommended)
+
+```bash
+brew install --cask malek-gatoufi/tap/claude-usage-widget
+```
+
+### Option 2 — Manual
 
 ```bash
 git clone git@github.com:malek-gatoufi/claude-usage-widget.git
 cd claude-usage-widget/claudeusage/ClaudeUsage
 bash install.sh
 ```
+
+See [INSTALL.md](INSTALL.md) for the full step-by-step guide.
 
 ---
 
