@@ -3,14 +3,26 @@
 ## Requirements
 
 - macOS 26 (Tahoe) or later
-- Xcode command line tools (`xcode-select --install`)
 - Claude Code CLI installed and logged in (`claude login`)
 
 No paid Apple Developer account needed.
 
 ---
 
-## Quick install (one command)
+## Option 1 — Homebrew (recommended)
+
+```bash
+brew install --cask malek-gatoufi/tap/claude-usage-widget
+open /Applications/ClaudeUsage.app
+```
+
+On first launch, the app automatically installs the Python server and LaunchAgent. No extra steps.
+
+---
+
+## Option 2 — Manual (one command)
+
+Requires Xcode command line tools (`xcode-select --install`).
 
 ```bash
 git clone git@github.com:malek-gatoufi/claude-usage-widget.git
@@ -30,9 +42,9 @@ The script:
 ## What happens after install
 
 1. **Menu bar icon** — shows your current session % color-coded:
-   - 🟢 Green: < 50%
-   - 🟠 Orange: 50–80%
-   - 🔴 Red: ≥ 80%
+   - Green: < 50%
+   - Orange: 50–80%
+   - Red: ≥ 80%
 
    If you're not logged in, it shows `⚙`.
 
@@ -102,6 +114,17 @@ A free Apple ID is sufficient.
 ---
 
 ## Uninstall
+
+### Via Homebrew
+
+```bash
+brew uninstall --cask claude-usage-widget
+launchctl unload ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist 2>/dev/null
+rm -f ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist
+rm -rf ~/.claude-widget
+```
+
+### Manual
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/lekmax.ClaudeUsage.WidgetData.plist

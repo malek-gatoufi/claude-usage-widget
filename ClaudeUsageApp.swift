@@ -60,6 +60,7 @@ final class UsageModel: ObservableObject {
     private var timer: Timer?
 
     init() {
+        ServerInstaller.setup()
         NotificationManager.shared.requestPermission()
         Task { @MainActor [weak self] in self?.refresh() }
         let interval = Double(UserDefaults.standard.integer(forKey: "refreshInterval")
