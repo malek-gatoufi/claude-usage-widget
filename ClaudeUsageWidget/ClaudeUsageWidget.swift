@@ -138,11 +138,11 @@ private func makeEntry(_ raw: RawCache) -> UsageEntry? {
 // MARK: - Live fetch
 
 private func fetchLiveEntry() async -> UsageEntry? {
-    // 1. Shared cache written by the menu bar app every 5 min — no API call needed
-    //    as long as the file is fresh.
-    if let (entry, age) = readSharedCache(), age < 360 { return entry }
+    // 1. Shared cache written by widget-server.py every 5 min — always prefer this.
+    //    No age limit: let the server decide freshness. Widget just displays what server wrote.
+    if let (entry, _) = readSharedCache() { return entry }
 
-    // 2. Direct Anthropic API — needs the OAuth token from our sandbox container.
+    // 2. Direct Anthropic API — fallback when server is not running.
     guard let token = readOAuthToken() else { return readCachedEntry() }
 
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
@@ -229,7 +229,7 @@ struct Provider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
         Task {
             let entry = await fetchLiveEntry() ?? readCachedEntry() ?? demoEntry
-            let next = Calendar.current.date(byAdding: .minute, value: 5, to: Date())!
+            let next = Calendar.current.date(byAdding: .minute, value: 2, to: Date())!
             completion(Timeline(entries: [entry], policy: .after(next)))
         }
     }
