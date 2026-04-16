@@ -135,14 +135,28 @@ private func makeEntry(_ raw: RawCache) -> UsageEntry? {
                       extra: toMetric(raw.extra), isDemo: false)
 }
 
+// MARK: - Local proxy fetch
+
+private func fetchFromProxy() async -> UsageEntry? {
+    var req = URLRequest(url: URL(string: "http://127.0.0.1:27182/")!)
+    req.timeoutInterval = 2
+    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+          let http = resp as? HTTPURLResponse, http.statusCode == 200,
+          let decoded = try? JSONDecoder().decode(RawCache.self, from: data)
+    else { return nil }
+    return makeEntry(decoded)
+}
+
 // MARK: - Live fetch
 
 private func fetchLiveEntry() async -> UsageEntry? {
-    // 1. Shared cache written by widget-server.py every 5 min — always prefer this.
-    //    No age limit: let the server decide freshness. Widget just displays what server wrote.
+    // 1. Local proxy (widget-server.py on 127.0.0.1:27182) — most reliable with ad-hoc signing.
+    if let entry = await fetchFromProxy() { return entry }
+
+    // 2. Shared cache file — works when proxy is momentarily unavailable.
     if let (entry, _) = readSharedCache() { return entry }
 
-    // 2. Direct Anthropic API — fallback when server is not running.
+    // 3. Direct Anthropic API — fallback when server is not running.
     guard let token = readOAuthToken() else { return readCachedEntry() }
 
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
