@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 
 /// Installs widget-server.py and its LaunchAgent on first launch.
 /// Works whether the app was installed via Homebrew, install.sh, or Xcode.
@@ -15,9 +16,20 @@ enum ServerInstaller {
     }
 
     static func setup() {
-        // Already running — nothing to do
+        registerLoginItem()
         if isAgentLoaded() { return }
         install()
+    }
+
+    /// Register the app as a login item so it auto-restarts at login.
+    static func registerLoginItem() {
+        if #available(macOS 13.0, *) {
+            do {
+                try SMAppService.mainApp.register()
+            } catch {
+                // Already registered or not supported — ignore
+            }
+        }
     }
 
     // MARK: - Private
