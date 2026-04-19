@@ -107,7 +107,7 @@ final class HistoryViewModel: ObservableObject {
         case .h24: cutoff = Date().addingTimeInterval(-86400)
         case .d7:  cutoff = Date().addingTimeInterval(-7 * 86400)
         }
-        return HistoryStore.shared.points.filter { $0.date >= cutoff }
+        return HistoryStore.shared.allPoints.filter { $0.date >= cutoff }
     }
 
     var xStride: Calendar.Component {

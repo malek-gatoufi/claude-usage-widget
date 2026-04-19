@@ -19,7 +19,6 @@ struct CacheMetric: Codable, Sendable {
 struct CacheEntry: Codable, Sendable {
     var session:  CacheMetric
     var weekly:   CacheMetric
-    var sonnet:   CacheMetric?
     var sonnet45: CacheMetric?
     var extra:    CacheMetric?   // pay-as-you-go extra usage (only when enabled)
 }
@@ -318,7 +317,7 @@ actor DataFetcher {
             guard let obj = json[key] as? [String: Any],
                   let util = obj["utilization"] as? Double
             else { return nil }
-            return CacheMetric(pct: round(util), resetAt: obj["resets_at"] as? String)
+            return CacheMetric(pct: min(round(util), 100), resetAt: obj["resets_at"] as? String)
         }
 
         // extra_usage resets on the 1st of each month (not included in resets_at)
@@ -328,12 +327,12 @@ actor DataFetcher {
                   let util = obj["utilization"] as? Double
             else { return nil }
             var comps = Calendar.current.dateComponents([.year, .month], from: Date())
-            comps.month = (comps.month ?? 1) + 1
-            if (comps.month ?? 1) > 12 { comps.month = 1; comps.year = (comps.year ?? 2026) + 1 }
             comps.day = 1
-            let resetDate = Calendar.current.date(from: comps) ?? Date().addingTimeInterval(30 * 86400)
-            let resetAt = ISO8601DateFormatter().string(from: resetDate)
-            return CacheMetric(pct: min(util, 100), resetAt: resetAt)
+            let startOfMonth  = Calendar.current.date(from: comps) ?? Date()
+            let startOfNextMonth = Calendar.current.date(byAdding: .month, value: 1, to: startOfMonth)
+                               ?? Date().addingTimeInterval(30 * 86400)
+            let resetAt = ISO8601DateFormatter().string(from: startOfNextMonth)
+            return CacheMetric(pct: min(round(util), 100), resetAt: resetAt)
         }
 
         guard let session = metric("five_hour"),
@@ -361,7 +360,7 @@ actor DataFetcher {
             "max_tokens": 1,
             "messages":  [["role": "user", "content": "x"]],
         ])
-        req.timeoutInterval = 15
+        req.timeoutInterval = 5
 
         let (_, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse else {
@@ -401,12 +400,12 @@ actor DataFetcher {
         }
 
         return CacheEntry(
-            session: CacheMetric(pct: round(pct5h),
+            session: CacheMetric(pct: min(round(pct5h), 100),
                                  resetAt: iso(ts5h,  fallback: 5 * 3600)),
-            weekly:  CacheMetric(pct: round(pct7d),
+            weekly:  CacheMetric(pct: min(round(pct7d), 100),
                                  resetAt: iso(ts7d,  fallback: 7 * 86400)),
             sonnet45: pctS45.map {
-                CacheMetric(pct: round($0), resetAt: iso(tsS45, fallback: 7 * 86400))
+                CacheMetric(pct: min(round($0), 100), resetAt: iso(tsS45, fallback: 7 * 86400))
             }
         )
     }
@@ -429,7 +428,6 @@ actor DataFetcher {
         guard let data = try? JSONEncoder().encode(entry) else { return }
         // UserDefaults — readable by widget via App Group suite
         DataFetcher.groupDefaults?.set(data, forKey: "usage-cache")
-        DataFetcher.groupDefaults?.synchronize()
         // Group Container file
         let dir = cacheURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -442,6 +440,5 @@ actor DataFetcher {
     func persistTokenToDefaults(_ json: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
         DataFetcher.groupDefaults?.set(data, forKey: "oauth-token")
-        DataFetcher.groupDefaults?.synchronize()
     }
 }

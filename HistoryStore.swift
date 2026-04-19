@@ -16,6 +16,7 @@ struct HistoryPoint: Codable, Identifiable {
 final class HistoryStore {
     static let shared = HistoryStore()
 
+    private let queue = DispatchQueue(label: "lekmax.ClaudeUsage.HistoryStore")
     private static let maxPoints = 7 * 24   // 7 days of hourly snapshots
     private let url: URL = {
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
@@ -27,9 +28,12 @@ final class HistoryStore {
         return FileManager.default.temporaryDirectory.appendingPathComponent("claude-history.json")
     }()
 
-    private(set) var points: [HistoryPoint] = []
+    private var points: [HistoryPoint] = []
 
-    init() { load() }
+    /// Thread-safe read of all history points.
+    var allPoints: [HistoryPoint] { queue.sync { points } }
+
+    init() { queue.sync { self.load() } }
 
     // MARK: - Read
 
@@ -43,33 +47,34 @@ final class HistoryStore {
     // MARK: - Write
 
     func append(_ entry: CacheEntry) {
-        let now = Date()
-        // Deduplicate: one point per hour
-        let cal = Calendar.current
-        if let last = points.last,
-           cal.isDate(last.date, equalTo: now, toGranularity: .hour) {
-            // Replace the current-hour point with fresher data
-            points[points.count - 1] = HistoryPoint(
-                date:     last.date,
-                session:  entry.session.pct,
-                weekly:   entry.weekly.pct,
-                sonnet45: entry.sonnet45?.pct,
-                extra:    entry.extra?.pct
-            )
-        } else {
-            points.append(HistoryPoint(
-                date:     now,
-                session:  entry.session.pct,
-                weekly:   entry.weekly.pct,
-                sonnet45: entry.sonnet45?.pct,
-                extra:    entry.extra?.pct
-            ))
+        queue.async { [weak self] in
+            guard let self else { return }
+            let now = Date()
+            let cal = Calendar.current
+            if let last = self.points.last,
+               cal.isDate(last.date, equalTo: now, toGranularity: .hour) {
+                // Replace the current-hour point with fresher data
+                self.points[self.points.count - 1] = HistoryPoint(
+                    date:     last.date,
+                    session:  entry.session.pct,
+                    weekly:   entry.weekly.pct,
+                    sonnet45: entry.sonnet45?.pct,
+                    extra:    entry.extra?.pct
+                )
+            } else {
+                self.points.append(HistoryPoint(
+                    date:     now,
+                    session:  entry.session.pct,
+                    weekly:   entry.weekly.pct,
+                    sonnet45: entry.sonnet45?.pct,
+                    extra:    entry.extra?.pct
+                ))
+            }
+            if self.points.count > HistoryStore.maxPoints {
+                self.points.removeFirst(self.points.count - HistoryStore.maxPoints)
+            }
+            self.save()
         }
-        // Keep only last 7 days
-        if points.count > HistoryStore.maxPoints {
-            points.removeFirst(points.count - HistoryStore.maxPoints)
-        }
-        save()
     }
 
     private func save() {

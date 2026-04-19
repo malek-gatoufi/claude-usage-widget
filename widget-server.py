@@ -8,6 +8,7 @@ The sandboxed widget extension reads data via HTTP without needing
 App Group access or TCC Full Disk Access permissions.
 """
 import json
+import signal
 import sys
 import threading
 import time
@@ -45,8 +46,10 @@ def load_token_json() -> Optional[dict]:
     ]:
         try:
             return json.loads(path.read_text())
-        except Exception:
+        except FileNotFoundError:
             pass
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"load_token_json: skipping {path}: {e}", file=sys.stderr, flush=True)
 
     # 2. macOS Keychain — used by newer Claude Code versions
     try:
@@ -57,8 +60,8 @@ def load_token_json() -> Optional[dict]:
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout.strip())
-    except Exception:
-        pass
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError) as e:
+        print(f"load_token_json: keychain error: {e}", file=sys.stderr, flush=True)
 
     return None
 
@@ -294,6 +297,13 @@ def _load_cache_if_fresh(data: dict) -> bool:
 
 
 if __name__ == "__main__":
+    # Graceful shutdown on SIGTERM (launchctl stop) and SIGINT (Ctrl-C)
+    def _shutdown(signum, frame):
+        print(f"Received signal {signum}, shutting down.", file=sys.stderr, flush=True)
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
     # Pre-load fresh cached data only — stale data (past resetAt) is discarded
     for cache_path in [
         GROUP_CONTAINER / "usage-cache.json",

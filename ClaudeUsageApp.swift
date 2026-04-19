@@ -59,6 +59,8 @@ final class UsageModel: ObservableObject {
 
     private var timer: Timer?
 
+    deinit { timer?.invalidate() }
+
     init() {
         NotificationManager.shared.requestPermission()
         Task { @MainActor [weak self] in self?.refresh() }
