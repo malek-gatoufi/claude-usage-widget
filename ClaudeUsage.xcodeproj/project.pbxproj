@@ -17,7 +17,6 @@
 		CC000001000000000000002A /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000001000000000000002B /* HistoryStore.swift */; };
 		CC000001000000000000003A /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000001000000000000003B /* HistoryView.swift */; };
 		DD000001000000000000001A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DD000001000000000000001B /* Assets.xcassets */; };
-		EE000001000000000000001A /* ServerInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE000001000000000000001B /* ServerInstaller.swift */; };
 		EE000001000000000000002A /* widget-server.py in Resources */ = {isa = PBXBuildFile; fileRef = EE000001000000000000002B /* widget-server.py */; };
 /* End PBXBuildFile section */
 
@@ -58,7 +57,6 @@
 		CC000001000000000000003B /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		BB000001000000000000003B /* ClaudeUsage.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaudeUsage.entitlements; sourceTree = "<group>"; };
 		DD000001000000000000001B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		EE000001000000000000001B /* ServerInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerInstaller.swift; sourceTree = "<group>"; };
 		EE000001000000000000002B /* widget-server.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "widget-server.py"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -115,7 +113,6 @@
 				CC000001000000000000003B /* HistoryView.swift */,
 				BB000001000000000000003B /* ClaudeUsage.entitlements */,
 				DD000001000000000000001B /* Assets.xcassets */,
-				EE000001000000000000001B /* ServerInstaller.swift */,
 				EE000001000000000000002B /* widget-server.py */,
 				8A98F5602F8A90A700D7ECF2 /* ClaudeUsageWidget */,
 				8A98F55B2F8A90A600D7ECF2 /* Frameworks */,
@@ -255,7 +252,6 @@
 				CC000001000000000000001A /* NotificationManager.swift in Sources */,
 				CC000001000000000000002A /* HistoryStore.swift in Sources */,
 				CC000001000000000000003A /* HistoryView.swift in Sources */,
-				EE000001000000000000001A /* ServerInstaller.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
