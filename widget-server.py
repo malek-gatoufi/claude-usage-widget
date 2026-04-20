@@ -38,18 +38,21 @@ _next_refresh_lock = threading.Lock()
 # ── OAuth helpers ─────────────────────────────────────────────────────────────
 
 def load_token_json() -> Optional[dict]:
-    """Read OAuth JSON from the first available source."""
-    # 1. Group Container cache (written by main app or previous refresh)
-    for path in [
-        GROUP_CONTAINER / "token-cache.json",
-        HOME / ".claude/.credentials.json",
-    ]:
-        try:
-            return json.loads(path.read_text())
-        except FileNotFoundError:
-            pass
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"load_token_json: skipping {path}: {e}", file=sys.stderr, flush=True)
+    """Read OAuth JSON from the first available source.
+
+    Note: GROUP_CONTAINER is intentionally NOT read here — it is a macOS
+    TCC-protected sandbox directory that non-sandboxed processes (like this
+    LaunchAgent) cannot access.  ~/.claude/.credentials.json is the canonical
+    source for non-sandboxed code.
+    """
+    # 1. Claude CLI credentials file — always accessible to a LaunchAgent
+    creds_path = HOME / ".claude/.credentials.json"
+    try:
+        return json.loads(creds_path.read_text())
+    except FileNotFoundError:
+        pass
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"load_token_json: cannot read {creds_path}: {e}", file=sys.stderr, flush=True)
 
     # 2. macOS Keychain — used by newer Claude Code versions
     try:
@@ -101,16 +104,13 @@ def maybe_refresh(token_data: dict) -> dict:
         token_data = dict(token_data)
         token_data["claudeAiOauth"] = updated
 
-        # Persist refreshed token
-        for path in [
-            GROUP_CONTAINER / "token-cache.json",
-            HOME / ".claude/.credentials.json",
-        ]:
-            if path.exists():
-                try:
-                    path.write_text(json.dumps(token_data))
-                except Exception:
-                    pass
+        # Persist refreshed token — only write to paths we can access
+        creds_path = HOME / ".claude/.credentials.json"
+        if creds_path.exists():
+            try:
+                creds_path.write_text(json.dumps(token_data))
+            except OSError as e:
+                print(f"maybe_refresh: cannot persist token: {e}", file=sys.stderr, flush=True)
 
     except Exception:
         pass
