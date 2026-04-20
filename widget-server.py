@@ -206,7 +206,7 @@ def refresh_cache() -> None:
         else:
             reset = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
         new_cache["extra"] = {
-            "pct": min(extra_obj["utilization"], 100),
+            "pct": min(round(extra_obj["utilization"]), 100),
             "resetAt": reset.isoformat(),
         }
 
