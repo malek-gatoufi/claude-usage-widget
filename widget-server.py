@@ -32,7 +32,28 @@ OAUTH_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_s
 
 _cache: Optional[dict] = None
 _cache_lock = threading.Lock()
+_next_refresh_at: float = 0.0   # module-level so startup can set it before the loop
 _next_refresh_lock = threading.Lock()
+
+BACKOFF_STATE_PATH = HOME / ".claude-widget" / "backoff-until.txt"
+
+
+def _read_persisted_backoff() -> float:
+    """Return the persisted backoff-until timestamp, or 0.0 if not set / expired."""
+    try:
+        val = float(BACKOFF_STATE_PATH.read_text().strip())
+        return val if val > time.time() else 0.0
+    except (FileNotFoundError, ValueError, OSError):
+        return 0.0
+
+
+def _persist_backoff(until: float) -> None:
+    """Save the backoff-until timestamp so restarts honour the rate-limit."""
+    try:
+        BACKOFF_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BACKOFF_STATE_PATH.write_text(str(until))
+    except OSError:
+        pass
 
 
 # ── OAuth helpers ─────────────────────────────────────────────────────────────
@@ -173,8 +194,10 @@ def refresh_cache() -> None:
                     delay = base
             else:
                 delay = base
+            until = time.time() + delay
             with _next_refresh_lock:
-                _next_refresh_at = time.time() + delay
+                _next_refresh_at = until
+            _persist_backoff(until)
             print(f"rate-limited (429), next retry in {delay}s", file=sys.stderr, flush=True)
         return
     except Exception:
@@ -215,16 +238,14 @@ def refresh_cache() -> None:
     with _next_refresh_lock:
         _next_refresh_at = time.time() + read_config_interval()
 
-    # Persist fresh data so the widget can read it directly (no HTTP call needed)
-    for cache_path in [
-        GROUP_CONTAINER / "usage-cache.json",
-        HOME / ".claude-widget" / "usage-cache.json",
-    ]:
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(new_cache))
-        except Exception:
-            pass
+    # Persist fresh data to ~/.claude-widget/ (accessible to this LaunchAgent process).
+    # Note: GROUP_CONTAINER is TCC-protected and cannot be written by a non-sandboxed process.
+    cache_path = HOME / ".claude-widget" / "usage-cache.json"
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(new_cache))
+    except OSError as e:
+        print(f"refresh_cache: cannot write cache: {e}", file=sys.stderr, flush=True)
 
 
 def read_config_interval() -> int:
@@ -240,7 +261,7 @@ def read_config_interval() -> int:
 
 def refresh_loop() -> None:
     global _next_refresh_at
-    _next_refresh_at = 0  # refresh immediately on first iteration
+    # _next_refresh_at is already initialised by __main__ (persisted backoff or 0)
     while True:
         now = time.time()
         with _next_refresh_lock:
@@ -277,21 +298,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _load_cache_if_fresh(data: dict) -> bool:
-    """Load cache only if the session hasn't reset yet. Returns True if loaded."""
+    """Load cache only if complete and the session hasn't reset yet. Returns True if loaded."""
     if not data.get("session") or not data.get("weekly"):
         return False
     reset_str = (data.get("session") or {}).get("resetAt")
-    if reset_str:
-        try:
-            from datetime import datetime as _dt
-            reset_time = _dt.fromisoformat(reset_str)
-            if _dt.now(timezone.utc) > reset_time:
-                print("startup cache is stale (session already reset), ignoring",
-                      file=sys.stderr, flush=True)
-                return False
-        except Exception:
-            pass
+    if not reset_str:
+        # resetAt is null — data is incomplete; reject it to avoid showing wrong values
+        print("startup cache has no session.resetAt, ignoring", file=sys.stderr, flush=True)
+        return False
+    try:
+        from datetime import datetime as _dt
+        reset_time = _dt.fromisoformat(reset_str)
+        if _dt.now(timezone.utc) > reset_time:
+            print("startup cache is stale (session already reset), ignoring",
+                  file=sys.stderr, flush=True)
+            return False
+    except Exception:
+        pass
     with _cache_lock:
+        global _cache
         _cache = data
     return True
 
@@ -304,21 +329,29 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    # Pre-load fresh cached data only — stale data (past resetAt) is discarded
-    for cache_path in [
-        GROUP_CONTAINER / "usage-cache.json",
-        HOME / ".claude-widget" / "usage-cache.json",
-    ]:
-        if cache_path.exists():
-            try:
-                data = json.loads(cache_path.read_text())
-                if _load_cache_if_fresh(data):
-                    break
-            except Exception:
-                pass
+    # Restore persisted rate-limit backoff so we don't hammer the API on every restart
+    backoff_until = _read_persisted_backoff()
+    if backoff_until > time.time():
+        remaining = int(backoff_until - time.time())
+        print(f"startup: honouring persisted rate-limit backoff, {remaining}s remaining",
+              file=sys.stderr, flush=True)
+        with _next_refresh_lock:
+            _next_refresh_at = backoff_until
 
-    # Initial live fetch (may be rate-limited; if so, cached data stays)
-    refresh_cache()
+    # Pre-load fresh cached data only — stale or incomplete data is discarded
+    cache_path = HOME / ".claude-widget" / "usage-cache.json"
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text())
+            _load_cache_if_fresh(data)
+        except Exception:
+            pass
+
+    # Initial live fetch only if not in backoff
+    with _next_refresh_lock:
+        due = _next_refresh_at
+    if time.time() >= due:
+        refresh_cache()
 
     # Background refresh thread
     threading.Thread(target=refresh_loop, daemon=True).start()
