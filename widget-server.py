@@ -203,12 +203,29 @@ def refresh_cache() -> None:
     except Exception:
         return
 
+    # Fallback reset times when the API omits resets_at (e.g. right after a session reset)
+    _fallback_reset = {
+        "five_hour":        5 * 3600,
+        "seven_day":        7 * 86400,
+        "seven_day_sonnet": 7 * 86400,
+    }
+
     def metric(key: str) -> Optional[dict]:
         obj = data.get(key, {})
         util = obj.get("utilization")
         if util is None:
             return None
-        return {"pct": round(util), "resetAt": obj.get("resets_at")}
+        reset_at = obj.get("resets_at")
+        if reset_at is None and key in _fallback_reset:
+            reset_at = datetime.now(timezone.utc).replace(microsecond=0)
+            reset_at = (reset_at.replace(second=0)
+                        .isoformat()
+                        .replace("+00:00", "Z"))
+            # Use offset from now as fallback
+            from datetime import timedelta
+            reset_at = (datetime.now(timezone.utc) +
+                        timedelta(seconds=_fallback_reset[key])).isoformat()
+        return {"pct": min(round(util), 100), "resetAt": reset_at}
 
     session = metric("five_hour")
     weekly = metric("seven_day")

@@ -313,11 +313,19 @@ actor DataFetcher {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw URLError(.cannotParseResponse) }
 
+        let fallbackResets: [String: TimeInterval] = [
+            "five_hour":        5 * 3600,
+            "seven_day":        7 * 86400,
+            "seven_day_sonnet": 7 * 86400,
+        ]
         func metric(_ key: String) -> CacheMetric? {
             guard let obj = json[key] as? [String: Any],
                   let util = obj["utilization"] as? Double
             else { return nil }
-            return CacheMetric(pct: min(round(util), 100), resetAt: obj["resets_at"] as? String)
+            // Use API-provided reset time; fall back to now+window when API omits it
+            let resetAt: String? = (obj["resets_at"] as? String) ??
+                fallbackResets[key].map { ISO8601DateFormatter().string(from: Date().addingTimeInterval($0)) }
+            return CacheMetric(pct: min(round(util), 100), resetAt: resetAt)
         }
 
         // extra_usage resets on the 1st of each month (not included in resets_at)
