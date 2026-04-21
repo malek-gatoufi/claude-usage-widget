@@ -4,14 +4,9 @@ import ServiceManagement
 struct SettingsView: View {
     let onSave: () -> Void
 
-    @State private var apiKeyInput:      String = ""
-    @State private var hasOAuth:         Bool   = false
-    @State private var hasKey:           Bool   = false
-    @State private var statusMsg:        String = ""
-    @State private var isGreen:          Bool   = false
-    @State private var isTesting:        Bool   = false
-    @State private var launchAtLogin:    Bool   = false
-    @State private var refreshInterval:  Int    = UserDefaults.standard.integer(forKey: "refreshInterval").nonZero ?? 300
+    @State private var hasOAuth:        Bool = false
+    @State private var launchAtLogin:   Bool = false
+    @State private var refreshInterval: Int  = UserDefaults.standard.integer(forKey: "refreshInterval").nonZero ?? 300
     @ObservedObject private var notifMgr = NotificationManager.shared
 
     private let orange = Color(red: 0.81, green: 0.48, blue: 0.34)
@@ -42,45 +37,27 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Connecté via Claude Pro (OAuth)")
+                                Text("Connecté via Claude Code (OAuth)")
                                     .foregroundStyle(.primary)
                                 Text("Token lu depuis le Keychain Claude Code")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                         }
-                    } else if hasKey {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                            Text("Clé API sauvegardée").foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Changer") {
-                                hasKey = false; apiKeyInput = ""; statusMsg = ""
-                            }
-                            .buttonStyle(.borderless).foregroundStyle(orange)
-                        }
                     } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Aucun token OAuth Claude trouvé.\nEntrez une clé API Anthropic en fallback :")
-                                .font(.caption).foregroundStyle(.secondary)
-                            SecureField("sk-ant-api03-…", text: $apiKeyInput)
-                                .textFieldStyle(.roundedBorder)
-                            HStack(alignment: .center, spacing: 10) {
-                                Button(isTesting ? "Test en cours…" : "Sauvegarder & Tester") {
-                                    Task { await saveAndTest() }
-                                }
-                                .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty || isTesting)
-                                .buttonStyle(.borderedProminent)
-                                .tint(orange)
-                                if !statusMsg.isEmpty {
-                                    Text(statusMsg)
-                                        .font(.caption)
-                                        .foregroundStyle(isGreen ? .green : .red)
-                                }
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Claude Code non connecté")
+                                    .foregroundStyle(.primary)
+                                Text("Lancez le terminal et exécutez :")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text("brew install --cask claude-code && claude login")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
                             }
-                            Link("Obtenir une clé → console.anthropic.com",
-                                 destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer()
                         }
                     }
                 }
@@ -187,31 +164,8 @@ struct SettingsView: View {
 
     // ── Helpers ────────────────────────────────────────────────────────
     private func loadState() {
-        hasOAuth = DataFetcher.shared.loadOAuthToken() != nil
-        hasKey   = DataFetcher.shared.loadAPIKey() != nil
+        hasOAuth      = DataFetcher.shared.loadOAuthToken() != nil
         launchAtLogin = SMAppService.mainApp.status == .enabled
-    }
-
-    private func saveAndTest() async {
-        let key = apiKeyInput.trimmingCharacters(in: .whitespaces)
-        isTesting = true; statusMsg = ""
-        do {
-            try DataFetcher.shared.saveAPIKey(key)
-            let entry = await DataFetcher.shared.fetch()
-            isTesting = false
-            if let e = entry {
-                statusMsg = "✓ Session \(Int(e.session.pct))%  ·  Weekly \(Int(e.weekly.pct))%"
-                isGreen = true; hasKey = true; apiKeyInput = ""
-                onSave()
-            } else {
-                statusMsg = "✗ Clé invalide ou erreur réseau"
-                isGreen = false
-            }
-        } catch {
-            isTesting = false
-            statusMsg = "✗ Erreur keychain"
-            isGreen = false
-        }
     }
 
     /// Write refresh interval to ~/.claude-widget/config.json so the server picks it up.

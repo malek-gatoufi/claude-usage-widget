@@ -28,9 +28,6 @@ struct CacheEntry: Codable, Sendable {
 actor DataFetcher {
     static let shared = DataFetcher()
 
-    private static let keychainService = "com.claudeusage.apikey"
-    private static let keychainAccount = "anthropic-api-key"
-
     /// Service name used by Claude CLI to store OAuth credentials in the macOS Keychain
     private static let claudeKeychainService = "Claude Code-credentials"
 
@@ -58,8 +55,7 @@ actor DataFetcher {
 
     // ─── Auth detection ───────────────────────────────────────────────
 
-    nonisolated var hasAuth: Bool   { loadOAuthToken() != nil || loadAPIKey() != nil }
-    nonisolated var hasAPIKey: Bool { hasAuth }
+    nonisolated var hasAuth: Bool { loadOAuthToken() != nil }
 
     // ─── OAuth ────────────────────────────────────────────────────────
 
@@ -202,44 +198,6 @@ actor DataFetcher {
         return token
     }
 
-    // ─── Keychain (nonisolated = sync, pas besoin d'await) ───────────
-
-    nonisolated func loadAPIKey() -> String? {
-        let q: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: DataFetcher.keychainService as CFString,
-            kSecAttrAccount: DataFetcher.keychainAccount as CFString,
-            kSecReturnData:  true,
-            kSecMatchLimit:  kSecMatchLimitOne,
-        ]
-        var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data,
-              let key = String(data: data, encoding: .utf8),
-              !key.isEmpty else { return nil }
-        return key
-    }
-
-    nonisolated func saveAPIKey(_ key: String) throws {
-        let data = Data(key.utf8)
-        let del: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: DataFetcher.keychainService as CFString,
-        ]
-        SecItemDelete(del as CFDictionary)
-
-        let add: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: DataFetcher.keychainService as CFString,
-            kSecAttrAccount: DataFetcher.keychainAccount as CFString,
-            kSecValueData:   data,
-        ]
-        let status = SecItemAdd(add as CFDictionary, nil)
-        if status != errSecSuccess {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-        }
-    }
-
     // ─── Local proxy (widget-server.py at 127.0.0.1:27182) ──────────
     // Single API caller: both menu bar and widget read from the same source,
     // so we never make duplicate API calls that could trigger rate limiting.
@@ -276,17 +234,6 @@ actor DataFetcher {
             } catch {
                 // OAuth token present but API call failed (e.g. 429 rate limit).
                 // Return last cached value so we don't show stale API key data.
-                return readCache()
-            }
-        }
-
-        // 2. API key fallback (only when no OAuth token at all)
-        if let key = loadAPIKey() {
-            do {
-                let entry = try await callAPIKeyFallback(key: key)
-                writeCache(entry)
-                return entry
-            } catch {
                 return readCache()
             }
         }
@@ -355,69 +302,6 @@ actor DataFetcher {
         )
     }
 
-    // ─── Fallback API key (POST /v1/messages, lit les headers) ───────
-
-    private func callAPIKeyFallback(key: String) async throws -> CacheEntry {
-        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-        req.httpMethod = "POST"
-        req.setValue(key,            forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01",   forHTTPHeaderField: "anthropic-version")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model":     "claude-haiku-4-5-20251001",
-            "max_tokens": 1,
-            "messages":  [["role": "user", "content": "x"]],
-        ])
-        req.timeoutInterval = 5
-
-        let (_, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-
-        var h = [String: String]()
-        for (k, v) in http.allHeaderFields {
-            if let ks = k as? String, let vs = v as? String {
-                h[ks.lowercased()] = vs
-            }
-        }
-
-        func dbl(_ k: String) -> Double {
-            Double(h["anthropic-ratelimit-unified-\(k)"] ?? "0") ?? 0
-        }
-        func tsi(_ k: String) -> TimeInterval {
-            Double(h["anthropic-ratelimit-unified-\(k)"] ?? "0") ?? 0
-        }
-
-        let pct5h = dbl("5h-utilization") * 100
-        let ts5h  = tsi("5h-reset")
-        let pct7d = dbl("7d-utilization") * 100
-        let ts7d  = tsi("7d-reset")
-
-        let pctS45Raw = h["anthropic-ratelimit-claude-sonnet-4-5-7d-utilization"]
-                     ?? h["anthropic-ratelimit-claude-sonnet-4-5-20251001-7d-utilization"]
-        let pctS45 = pctS45Raw.flatMap(Double.init).map { $0 * 100 }
-        let tsS45  = Double(h["anthropic-ratelimit-claude-sonnet-4-5-7d-reset"]
-                          ?? h["anthropic-ratelimit-claude-sonnet-4-5-20251001-7d-reset"]
-                          ?? "0") ?? 0
-
-        let fmt = ISO8601DateFormatter()
-        func iso(_ ts: TimeInterval, fallback: TimeInterval) -> String {
-            fmt.string(from: ts > 0 ? Date(timeIntervalSince1970: ts)
-                                    : Date().addingTimeInterval(fallback))
-        }
-
-        return CacheEntry(
-            session: CacheMetric(pct: min(round(pct5h), 100),
-                                 resetAt: iso(ts5h,  fallback: 5 * 3600)),
-            weekly:  CacheMetric(pct: min(round(pct7d), 100),
-                                 resetAt: iso(ts7d,  fallback: 7 * 86400)),
-            sonnet45: pctS45.map {
-                CacheMetric(pct: min(round($0), 100), resetAt: iso(tsS45, fallback: 7 * 86400))
-            }
-        )
-    }
-
     // ─── Cache ────────────────────────────────────────────────────────
 
     private static let groupDefaults = UserDefaults(suiteName: "group.lekmax.ClaudeUsage")
@@ -434,14 +318,22 @@ actor DataFetcher {
 
     private func writeCache(_ entry: CacheEntry) {
         guard let data = try? JSONEncoder().encode(entry) else { return }
-        // UserDefaults — readable by widget via App Group suite
+        // UserDefaults — readable by widget via App Group suite (provisioned signing)
         DataFetcher.groupDefaults?.set(data, forKey: "usage-cache")
-        // Group Container file
+        // Group Container file (provisioned signing)
         let dir = cacheURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? data.write(to: cacheURL, options: [])
-        // Note: ~/.claude-widget/usage-cache.json is written by widget-server.py (non-sandboxed).
-        // The sandboxed app cannot write outside its container with ad-hoc signing.
+        // ~/.claude-widget/usage-cache.json — readable by the widget extension via
+        // temporary-exception.files.home-relative-path.read-only + getpwuid bypass.
+        // Also written by widget-server.py; we write here too so the widget works
+        // even when the server isn't running.
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            let base = URL(fileURLWithPath: String(cString: dir))
+                .appendingPathComponent(".claude-widget")
+            try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            try? data.write(to: base.appendingPathComponent("usage-cache.json"), options: .atomic)
+        }
     }
 
     /// Also persist OAuth token to UserDefaults so widget can read it without file I/O.

@@ -55,6 +55,21 @@ If you have Claude Code installed and are logged in, the app uses OAuth automati
 
 ---
 
+## Requirements
+
+- macOS 26+ (Tahoe)
+- Claude Code installed and logged in
+
+```bash
+# Install Claude Code (if not already installed)
+brew install --cask claude-code
+
+# Log in — this stores your OAuth token in the macOS Keychain
+claude login
+```
+
+---
+
 ## Quick install
 
 ### Option 1 — Homebrew (recommended)
@@ -80,7 +95,7 @@ See [INSTALL.md](INSTALL.md) for the full step-by-step guide.
 ```
 ClaudeUsage/
 ├── ClaudeUsageApp.swift          # @main, menu bar, UsageModel (ObservableObject)
-├── DataFetcher.swift             # OAuth + API key auth, Anthropic API calls, cache
+├── DataFetcher.swift             # OAuth auth, Anthropic API calls, cache
 ├── SettingsView.swift            # Settings window (SwiftUI)
 ├── ClaudeUsage.entitlements      # Sandbox: network.client + keychain
 └── ClaudeUsageWidget/
